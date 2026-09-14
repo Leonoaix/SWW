@@ -24,8 +24,8 @@
         </div>
         <aside class="local-note">
           <span class="local-icon" aria-hidden="true">↳</span>
-          <strong>在你的电脑上完成</strong>
-          <p>PDF 解析与匹配在本地运行。浏览器直接连接 WaterlooWorks；登录由你完成，无需注册 SWW 账户。</p>
+          <strong>经历与岗位，逐项核对</strong>
+          <p>PDF 在本机解析。DeepSeek 模式会把简历文本和职位内容发送至 DeepSeek API，依据具体经历评估岗位要求；学校登录仍在本机完成。</p>
         </aside>
       </section>
 
@@ -93,6 +93,15 @@
             <div class="field"><label for="locations">优先地点</label><input id="locations" type="text" placeholder="如 Waterloo, Toronto, Remote" maxlength="1000" /></div>
             <div class="field"><label for="exclude-keywords">排除关键词</label><input id="exclude-keywords" type="text" placeholder="如 unpaid, senior" maxlength="1000" /></div>
           </section>
+          <section class="setup-step" aria-labelledby="engine-heading">
+            <div class="step-heading"><span class="step-number">04</span><h2 id="engine-heading">匹配方式</h2></div>
+            <div class="field"><label for="ranking-engine">排序引擎</label><select id="ranking-engine"><option value="deepseek" selected>DeepSeek · 经验证据与语义评估</option><option value="local">本地基础匹配 · 不发送数据</option></select></div>
+            <p id="ai-config" class="field-hint">正在检查 DeepSeek 配置…</p>
+            <p class="field-hint">DeepSeek 将评估所有未被规则排除的职位；先移除常见邮箱、电话和链接，但不保证匿名化。API 按实际 token 用量计费，结果会在本机缓存。</p>
+            <div class="field"><label for="ai-max-jobs">本次 AI 评估职位上限</label><input id="ai-max-jobs" type="number" min="1" max="10000" value="500" /></div>
+            <p class="field-hint">超出上限会提示调整，不会按关键词偷偷丢弃候选职位。</p>
+            <div id="ai-progress" class="crawl-progress" aria-live="polite" hidden><p id="ai-message"></p><p id="ai-usage" class="field-hint"></p><button id="ai-cancel" type="button" class="btn btn-ghost btn-sm">停止 AI 评估</button></div>
+          </section>
         </section>
 
         <section class="results-panel" aria-labelledby="results-title">
@@ -100,7 +109,8 @@
             <div><p class="matcher-eyebrow">YOUR APPLICATION SHORTLIST</p><h2 id="results-title">申请优先级 <span class="top-label">TOP 100</span></h2></div>
             <button id="rank-button" class="btn btn-primary" type="button" disabled>生成排名 →</button>
           </header>
-          <p class="ranking-note">根据简历与职位文本匹配，展示匹配理由和技能缺口。分数是相对优先级，不代表录用概率；申请前请确认资格、截止日期和职位要求。</p>
+          <p class="ranking-note">逐项核对岗位要求与简历原文，区分直接经验、可迁移经验、缺失证据和资格冲突。分数用于申请优先级参考，不代表录用概率。</p>
+          <p id="ai-result-note" class="coverage-note" hidden></p>
           <div class="result-stats" aria-label="排名数据范围">
             <div><span class="small-label">已收集职位</span><strong id="total-count" class="tabular">0</strong></div>
             <div><span class="small-label">参与排名</span><strong id="eligible-count" class="tabular">—</strong></div>
@@ -115,7 +125,7 @@
         </section>
       </div>
     </main>
-    <footer class="matcher-footer"><span>SWW · WaterlooWorks 职位匹配</span><span>简历、本地浏览器会话与职位缓存保存在本机</span></footer>
+    <footer class="matcher-footer"><span>SWW · WaterlooWorks 职位匹配</span><span>DeepSeek 模式发送文本至其 API；浏览器会话和评估缓存保存在本机</span></footer>
     <noscript><p class="matcher-alert">此工具需要 JavaScript，请启用后重新加载页面。</p></noscript>
     <script type="module" src="/src/waterlooworks.ts"></script>
   </body>

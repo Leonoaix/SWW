@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field, field_validator
 from .crawler import WaterlooWorksCrawler
 from .ranking import rank_jobs
 from .resume import extract_resume
+from .ai_ranking import AIRanker, eligible_jobs
+from .deepseek import DeepSeekClient, DeepSeekError, load_api_key, model_name
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_BODY = 12 * 1024 * 1024
@@ -113,6 +115,11 @@ class RankOptions(BaseModel):
     preferences: Preferences = Field(default_factory=Preferences)
 
 
+class AIRankOptions(RankOptions):
+    max_jobs: int = Field(default=500, ge=1, le=10000)
+    refine_pairs: int = Field(default=6, ge=0, le=20)
+
+
 class Job(BaseModel):
     id: str = Field(default="", max_length=200)
     title: str = Field(min_length=1, max_length=1000)
@@ -158,17 +165,18 @@ def write_private_json(path: Path, value):
 
 def csv_safe(value):
     if isinstance(value, (list, dict)):
-        value = " | ".join(map(str, value)) if isinstance(value, list) else json.dumps(value, ensure_ascii=False)
+        value = " | ".join(value) if isinstance(value, list) and all(isinstance(item, str) for item in value) else json.dumps(value, ensure_ascii=False)
     text = str(value if value is not None else "")
     # Job text is untrusted, including when subsequently opened in Excel.
     return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r")) else text
 
 
-def create_app(data_dir: Optional[Path] = None, crawler=None):
+def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None):
     directory = data_dir or ROOT / ".sww"
     state = {"resume": None, "jobs": [], "ranking": None, "crawl": initial_crawl(),
              "task": None, "cancel": asyncio.Event(), "browser_lock": asyncio.Lock(),
-             "source": None, "collected_at": None}
+             "source": None, "collected_at": None, "ai_task": None,
+             "ai": {"state": "idle", "completed": 0, "total": 0, "message": "", "run_id": 0}}
     browser = crawler if crawler is not None else WaterlooWorksCrawler(directory)
 
     @asynccontextmanager
@@ -193,6 +201,9 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
         if state["task"] and not state["task"].done():
             state["task"].cancel()
             await asyncio.gather(state["task"], return_exceptions=True)
+        if state["ai_task"] and not state["ai_task"].done():
+            state["ai_task"].cancel()
+            await asyncio.gather(state["ai_task"], return_exceptions=True)
         await browser.close()
 
     app = FastAPI(title="SWW local matcher", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -200,7 +211,15 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
     app.state.matcher = state
 
     def busy():
-        return state["task"] is not None and not state["task"].done()
+        return any(state[name] is not None and not state[name].done() for name in ("task", "ai_task"))
+
+    def ai_config():
+        try:
+            if ai_factory is None:
+                load_api_key(ROOT)
+            return {"configured": True, "model": model_name(), "message": ""}
+        except DeepSeekError as exc:
+            return {"configured": False, "model": "", "message": str(exc)}
 
     def save_jobs():
         write_private_json(directory / "jobs.json", {key: state[key] for key in
@@ -211,10 +230,14 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
         resume = state["resume"]
         return {"crawl": state["crawl"], "job_count": len(state["jobs"]), "has_resume": resume is not None,
                 "resume": {key: resume[key] for key in ("filename", "skills", "warnings")} if resume else None,
-                "source": state["source"], "collected_at": state["collected_at"]}
+                "source": state["source"], "collected_at": state["collected_at"],
+                "ai": state["ai"], "ai_config": ai_config()}
 
     @app.post("/matcher-api/resume")
     async def upload_resume(file: UploadFile = File(...)):
+        if busy():
+            await file.close()
+            raise HTTPException(409, "请先等待或停止当前采集/AI 评估，再更新简历。")
         try:
             data = await file.read(MAX_PDF + 1)
         finally:
@@ -225,8 +248,11 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
             resume = await asyncio.to_thread(extract_resume, data)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        if busy():
+            raise HTTPException(409, "处理 PDF 期间另一个任务已开始，请等待它完成后重新上传。")
         resume["filename"] = Path((file.filename or "resume.pdf").replace("\\", "/")).name[:255]
         state["resume"], state["ranking"] = resume, None
+        state["ai"]["state"] = "idle"
         return {key: resume[key] for key in ("filename", "skills", "warnings")}
 
     @app.post("/matcher-api/browser")
@@ -273,6 +299,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
             raise HTTPException(409, "已有采集或浏览器操作正在进行。")
         state["cancel"] = asyncio.Event()
         state["ranking"] = None
+        state["ai"]["state"] = "idle"
         state["crawl"] = {**initial_crawl(), "state": "running", "message": "正在检查登录并采集职位…"}
         state["task"] = asyncio.create_task(run_crawl(options))
         return {"message": "采集已开始。"}
@@ -288,6 +315,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
             raise HTTPException(409, "请先停止当前采集。")
         state["jobs"] = [job.model_dump() for job in payload.jobs]
         state["ranking"] = None
+        state["ai"]["state"] = "idle"
         state["source"] = "import"
         state["collected_at"] = datetime.now(timezone.utc).isoformat()
         state["crawl"] = {**initial_crawl(), "job_count": len(state["jobs"]),
@@ -307,14 +335,72 @@ def create_app(data_dir: Optional[Path] = None, crawler=None):
         result = rank_jobs(state["resume"]["text"], state["jobs"], options.limit, options.preferences.model_dump())
         result.update(source=state["source"], collected_at=state["collected_at"], crawl=state["crawl"])
         state["ranking"] = result
+        state["ai"]["state"] = "idle"
         return result
+
+    async def run_ai(options, client):
+        async def progress(update):
+            state["ai"].update(update)
+            state["ai"]["message"] = ("正在双向比较分数接近的岗位…" if update["stage"] == "pairwise"
+                                      else f"已评估 {update['completed']}/{update['total']} 个职位，失败 {update['failed']} 个。")
+        try:
+            ranker = AIRanker(client, directory / "ai-cache")
+            result = await ranker.rank(state["resume"]["text"], state["jobs"], options.preferences.model_dump(),
+                                       options.limit, options.max_jobs, options.refine_pairs, progress)
+            result.update(source=state["source"], collected_at=state["collected_at"], crawl=state["crawl"])
+            state["ranking"] = result
+            state["ai"].update(state="completed", message=f"语义排序完成：成功评估 {result['assessed_jobs']} 个职位。",
+                               complete=result["complete"], usage=result["usage"])
+        except asyncio.CancelledError:
+            state["ai"].update(state="cancelled", message="AI 评估已停止。成功的单职位评估已缓存，可重试复用。")
+            raise
+        except DeepSeekError as exc:
+            state["ai"].update(state="failed", message=str(exc))
+        except Exception:
+            state["ai"].update(state="failed", message="AI 评估发生内部错误；已停止，未把基础排名冒充 AI 结果。")
+        finally:
+            await client.close()
+
+    @app.post("/matcher-api/ai/rank")
+    async def start_ai(options: AIRankOptions):
+        if busy():
+            raise HTTPException(409, "已有采集或 AI 评估正在进行。")
+        if state["resume"] is None or not state["jobs"]:
+            raise HTTPException(409, "请先上传简历并采集或导入职位。")
+        eligible, _ = eligible_jobs(state["jobs"], options.preferences.model_dump())
+        if len(eligible) > options.max_jobs:
+            raise HTTPException(422, f"有 {len(eligible)} 个待评估职位，超过 AI 上限 {options.max_jobs}；请提高上限或筛选职位。")
+        try:
+            client = ai_factory() if ai_factory else DeepSeekClient(load_api_key(ROOT), model_name())
+        except DeepSeekError as exc:
+            raise HTTPException(503, str(exc)) from None
+        state["ranking"] = None
+        state["ai"] = {"state": "running", "stage": "criteria", "completed": 0, "total": len(eligible),
+                       "message": "正在逐项评估岗位要求与简历证据…", "run_id": state["ai"]["run_id"] + 1}
+        state["ai_task"] = asyncio.create_task(run_ai(options, client))
+        return {"message": "DeepSeek 语义评估已开始。", "run_id": state["ai"]["run_id"]}
+
+    @app.post("/matcher-api/ai/cancel")
+    async def cancel_ai():
+        task = state["ai_task"]
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return {"message": "已停止 AI 评估。"}
+
+    @app.get("/matcher-api/ai/result")
+    async def ai_result():
+        if state["ai"]["state"] != "completed" or state["ranking"] is None or state["ranking"].get("engine") != "deepseek":
+            raise HTTPException(409, "尚无已完成的 AI 排名。")
+        return state["ranking"]
 
     @app.get("/matcher-api/export.csv")
     async def export_csv():
         if state["ranking"] is None:
             raise HTTPException(409, "请先生成排序。")
         fields = ["rank", "score", "id", "title", "company", "location", "deadline", "url",
-                  "matched_skills", "missing_skills", "reasons", "warnings", "score_breakdown"]
+                  "matched_skills", "missing_skills", "reasons", "warnings", "score_breakdown",
+                  "ai_status", "eligibility", "semantic_score", "evidence_coverage", "criteria", "pairwise_reviews"]
         stream = io.StringIO()
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()

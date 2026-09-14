@@ -29,6 +29,13 @@ jobs:
           cache-dependency-path: matcher/requirements.lock
       - run: python -m pip install -r matcher/requirements.lock -e './matcher[test]'
       - run: python -m playwright install --with-deps chromium
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
       - run: python -m pytest matcher/tests -q
 
   backend:
@@ -176,5 +183,12 @@ jobs:
           value=$(grep -E '^SESSION_SECRET=' .env.example | cut -d= -f2- || true)
           if [ -n "$value" ]; then
             echo "::error::.env.example ships a non-empty SESSION_SECRET; it must stay blank"
+            exit 1
+          fi
+
+      - name: Refuse committed DeepSeek credential files
+        run: |
+          if git ls-files --error-unmatch deepseek_api.txt >/dev/null 2>&1; then
+            echo "::error::deepseek_api.txt must stay local and ignored"
             exit 1
           fi

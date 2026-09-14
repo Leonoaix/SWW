@@ -2,6 +2,8 @@ type JsonObject = Record<string, unknown>;
 type CrawlState = "idle" | "login_required" | "running" | "completed" | "failed" | "cancelled";
 interface Resume { filename: string; skills: string[]; warnings: string[] }
 interface Status {
+  ai: JsonObject;
+  ai_config: JsonObject;
   crawl: { state: CrawlState; message: string; job_count: number; pages: number; errors: string[]; warnings: string[]; complete: boolean };
   job_count: number;
   has_resume: boolean;
@@ -10,12 +12,13 @@ interface Status {
   collected_at: string;
 }
 interface RankedJob {
+  criteria: JsonObject[]; eligibility: string; pairwise_reviews: JsonObject[];
   id: string; title: string; company: string; location: string; description: string;
   requirements: string; deadline: string; url: string; rank: number; score: number;
   matched_skills: string[]; missing_skills: string[]; reasons: string[]; warnings: string[];
   score_breakdown: JsonObject;
 }
-interface Ranking { jobs: RankedJob[]; total_jobs: number; eligible_jobs: number; excluded_jobs: JsonObject[]; method: string }
+interface Ranking { jobs: RankedJob[]; total_jobs: number; eligible_jobs: number; excluded_jobs: JsonObject[]; method: string; engine: string; assessed_jobs: number; failed_jobs: JsonObject[]; usage: JsonObject; warnings: string[]; cached_jobs: number }
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -35,6 +38,7 @@ const normalizeStatus = (value: unknown): Status => {
   const crawl = object(data.crawl);
   const state = string(crawl.state);
   return {
+    ai: object(data.ai), ai_config: object(data.ai_config),
     crawl: { state: (["idle", "login_required", "running", "completed", "failed", "cancelled"].includes(state) ? state : "idle") as CrawlState,
       message: string(crawl.message), job_count: number(crawl.job_count), pages: number(crawl.pages), errors: strings(crawl.errors), warnings: strings(crawl.warnings), complete: crawl.complete === true },
     job_count: number(data.job_count), has_resume: data.has_resume === true,
@@ -48,13 +52,15 @@ const normalizeRanking = (value: unknown): Ranking => {
   return {
     jobs: data.jobs.map((value, index) => {
       const job = object(value);
-      return { id: string(job.id), title: string(job.title) || "未提供职位名称", company: string(job.company) || "未提供公司名称",
+      return { criteria: Array.isArray(job.criteria) ? job.criteria.map(object) : [], eligibility: string(job.eligibility), pairwise_reviews: Array.isArray(job.pairwise_reviews) ? job.pairwise_reviews.map(object) : [],
+        id: string(job.id), title: string(job.title) || "未提供职位名称", company: string(job.company) || "未提供公司名称",
         location: strings(job.location).join(", "), description: string(job.description), requirements: strings(job.requirements).join("\n"),
         deadline: string(job.deadline), url: string(job.url), rank: number(job.rank, index + 1), score: number(job.score),
         matched_skills: strings(job.matched_skills), missing_skills: strings(job.missing_skills), reasons: strings(job.reasons), warnings: strings(job.warnings), score_breakdown: object(job.score_breakdown) };
     }),
     total_jobs: number(data.total_jobs), eligible_jobs: number(data.eligible_jobs),
     excluded_jobs: Array.isArray(data.excluded_jobs) ? data.excluded_jobs.map(object) : [], method: string(data.method),
+    engine: string(data.engine), assessed_jobs: number(data.assessed_jobs), failed_jobs: Array.isArray(data.failed_jobs) ? data.failed_jobs.map(object) : [], usage: object(data.usage), warnings: strings(data.warnings), cached_jobs: number(data.cached_jobs),
   };
 };
 
@@ -64,6 +70,8 @@ let connected = false;
 let actionPending = false;
 let polling = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
+let loadedAIRun = -1;
+const aiRunning = (): boolean => currentStatus?.ai.state === "running";
 const stateNames: Record<CrawlState, string> = { idle: "尚未抓取", login_required: "等待学校登录", running: "正在抓取", completed: "抓取已结束", failed: "抓取未完成", cancelled: "抓取已停止" };
 
 async function request(path: string, options: RequestInit = {}): Promise<unknown> {
@@ -116,21 +124,29 @@ function renderResume(resume: Resume | null): void {
   listMessages("resume-warnings", resume.warnings);
 }
 function updateControls(): void {
-  const running = currentStatus?.crawl.state === "running";
+  const running = currentStatus?.crawl.state === "running" || aiRunning();
   const unavailable = !connected || actionPending;
   $("upload-button").toggleAttribute("disabled", unavailable || running || !$("resume-file").matches(":valid"));
   $("browser-button").toggleAttribute("disabled", unavailable || running);
   $("crawl-button").toggleAttribute("disabled", unavailable || running);
-  $("cancel-button").hidden = !running;
+  $("cancel-button").hidden = currentStatus?.crawl.state !== "running";
   $("cancel-button").toggleAttribute("disabled", unavailable);
   $("import-button").toggleAttribute("disabled", unavailable || running || !$("jobs-file").hasAttribute("data-selected"));
-  $("rank-button").toggleAttribute("disabled", unavailable || running || !currentStatus?.has_resume || !currentStatus.job_count);
+  const usesAI = $<HTMLSelectElement>("ranking-engine").value === "deepseek";
+  $("rank-button").toggleAttribute("disabled", unavailable || running || !currentStatus?.has_resume || !currentStatus.job_count || (usesAI && currentStatus?.ai_config.configured !== true));
+  $("ai-cancel").hidden = !aiRunning();
+  $("ai-cancel").toggleAttribute("disabled", unavailable);
   $("export-button").toggleAttribute("disabled", unavailable || !ranking);
   $("resume-file").toggleAttribute("disabled", actionPending || running);
   $("jobs-file").toggleAttribute("disabled", actionPending || running);
-  for (const id of ["max-pages", "crawl-delay", "target-roles", "locations", "exclude-keywords"]) $(id).toggleAttribute("disabled", actionPending || running);
+  for (const id of ["max-pages", "crawl-delay", "target-roles", "locations", "exclude-keywords", "ranking-engine", "ai-max-jobs"]) $(id).toggleAttribute("disabled", actionPending || running);
 }
 function renderStatus(status: Status): void {
+  $("ai-config").textContent = status.ai_config.configured ? `已配置模型：${string(status.ai_config.model)}` : string(status.ai_config.message) || "服务尚未配置 DeepSeek。";
+  $("ai-progress").hidden = !status.ai.state || status.ai.state === "idle";
+  $("ai-message").textContent = string(status.ai.message);
+  const usage = object(status.ai.usage);
+  $("ai-usage").textContent = usage.requests ? `本次 API 请求 ${number(usage.requests)} 次；输入 ${number(usage.prompt_tokens)} / 输出 ${number(usage.completion_tokens)} tokens。` : "";
   $("crawl-state").textContent = stateNames[status.crawl.state];
   $("crawl-count").textContent = String(status.crawl.job_count);
   $("crawl-pages").textContent = String(status.crawl.pages);
@@ -154,8 +170,17 @@ async function refreshStatus(): Promise<void> {
   polling = true;
   try {
     currentStatus = normalizeStatus(await request("/status"));
+    if (currentStatus.ai.state === "idle") loadedAIRun = -1;
     connected = true;
     renderStatus(currentStatus);
+    if (currentStatus.ai.state === "completed" && number(currentStatus.ai.run_id) !== loadedAIRun) {
+      try {
+        ranking = normalizeRanking(await request("/ai/result"));
+        loadedAIRun = number(currentStatus.ai.run_id);
+        message("action-error", "");
+        renderResults();
+      } catch (error) { message("action-error", error instanceof Error ? error.message : "AI 结果尚未就绪。"); }
+    }
   } catch {
     connected = false;
   } finally {
@@ -169,7 +194,7 @@ async function refreshStatus(): Promise<void> {
 async function poll(): Promise<void> {
   if (!document.hidden) await refreshStatus();
   clearTimeout(timer);
-  timer = setTimeout(() => { void poll(); }, currentStatus?.crawl.state === "running" ? 2500 : 6000);
+  timer = setTimeout(() => { void poll(); }, currentStatus?.crawl.state === "running" || aiRunning() ? 2500 : 6000);
 }
 async function perform(buttonId: string, busyText: string, action: () => Promise<void>): Promise<void> {
   if (actionPending) return;
@@ -190,6 +215,7 @@ async function perform(buttonId: string, busyText: string, action: () => Promise
   }
 }
 function clearRanking(reason?: string): void {
+  message("ai-result-note", "");
   ranking = null;
   $("job-results").replaceChildren();
   $("eligible-count").textContent = "—";
@@ -236,6 +262,19 @@ function renderJob(job: RankedJob): HTMLLIElement {
   }
   const details = element("details", "job-detail");
   details.append(element("summary", "", "查看技能缺口、评分与职位详情"));
+  if (job.criteria.length) {
+    const labels: Record<string, string> = { direct: "直接经验", transferable: "可迁移经验", missing: "未体现", unknown: "待确认", conflict: "资格冲突" };
+    details.append(element("h4", "", `资格核对：${job.eligibility === "conflict" ? "发现冲突" : job.eligibility === "needs_review" ? "需要核实" : "未发现明确冲突"}`));
+    for (const criterion of job.criteria) {
+      const block = element("div", "evidence-item");
+      block.append(element("h4", "", `${labels[string(criterion.status)] || string(criterion.status)} · ${criterion.importance === "must" ? "必需" : "优先"} · ${string(criterion.requirement)}`));
+      block.append(element("p", "", string(criterion.explanation)));
+      block.append(element("p", "small-label", "职位原文"), element("blockquote", "evidence-quote", string(criterion.job_quote)));
+      if (criterion.resume_quote) block.append(element("p", "small-label", "简历证据"), element("blockquote", "evidence-quote", string(criterion.resume_quote)));
+      details.append(block);
+    }
+    for (const review of job.pairwise_reviews) details.append(element("p", "field-hint", `与 #${string(review.other_id)} 双向比较：${string(review.reason)}`));
+  }
   details.append(element("h4", "", "简历中未识别到的职位技能"));
   details.append(job.missing_skills.length ? chips(job.missing_skills, true) : element("p", "", "未发现额外技能缺口。这不代表已满足所有申请条件。"));
   const breakdown = Object.entries(job.score_breakdown);
@@ -266,6 +305,7 @@ function renderJob(job: RankedJob): HTMLLIElement {
 }
 function renderResults(): void {
   if (!ranking) return;
+  message("ai-result-note", ranking.engine === "deepseek" ? `DeepSeek 已评估 ${ranking.assessed_jobs}/${ranking.eligible_jobs} 个候选，其中 ${ranking.cached_jobs} 个复用缓存。${ranking.failed_jobs.length ? `${ranking.failed_jobs.length} 个失败，未混入基础分数；本次排名不完整。` : ""} ${ranking.warnings.join(" ")}` : "当前使用本地基础匹配。");
   const query = $("result-search") as HTMLInputElement;
   const needle = query.value.trim().toLowerCase();
   const jobs = ranking.jobs.filter(job => `${job.title} ${job.company} ${job.location} ${job.matched_skills.join(" ")}`.toLowerCase().includes(needle));
@@ -278,7 +318,7 @@ function renderResults(): void {
   $("ranked-count").textContent = String(ranking.jobs.length);
   $("ranking-details").hidden = false;
   $("ranking-method").textContent = ranking.method || "本地文本匹配。请结合原始职位要求判断。";
-  listMessages("excluded-jobs", ranking.excluded_jobs.map(job => `${string(job.title) || string(job.id)}：${string(job.reason) || "已排除"}`));
+  listMessages("excluded-jobs", [...ranking.excluded_jobs, ...ranking.failed_jobs].map(job => `${string(job.title) || string(job.id)}：${string(job.reason) || "已排除"}`));
 }
 const preferences = (): Record<string, string[]> => {
   const split = (id: string) => ($<HTMLInputElement>(id).value).split(/[,，\n]/).map(value => value.trim()).filter(Boolean);
@@ -330,6 +370,13 @@ $("import-button").addEventListener("click", () => void perform("import-button",
   message("action-message", `已导入 ${number(result.job_count)} 个职位。`);
 }));
 $("rank-button").addEventListener("click", () => void perform("rank-button", "匹配中…", async () => {
+  if ($<HTMLSelectElement>("ranking-engine").value === "deepseek") {
+    const maxJobs = Number($<HTMLInputElement>("ai-max-jobs").value);
+    if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 10000) throw new Error("AI 评估上限必须为 1 至 10000 的整数。");
+    await post("/ai/rank", { limit: 100, preferences: preferences(), max_jobs: maxJobs });
+    clearRanking("DeepSeek 正在逐项核对简历经历和岗位要求，可在左侧查看进度或停止。");
+    return;
+  }
   ranking = normalizeRanking(await post("/rank", { limit: 100, preferences: preferences() }));
   $<HTMLInputElement>("result-search").value = "";
   renderResults();
@@ -344,7 +391,8 @@ $("export-button").addEventListener("click", () => void perform("export-button",
   document.body.append(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }));
-for (const id of ["target-roles", "locations", "exclude-keywords"]) $(id).addEventListener("input", () => { if (ranking) clearRanking("申请偏好已更改。请重新生成排名以应用新偏好。"); });
+$("ai-cancel").addEventListener("click", () => void perform("ai-cancel", "停止中…", async () => { await post("/ai/cancel"); }));
+for (const id of ["target-roles", "locations", "exclude-keywords", "ranking-engine", "ai-max-jobs"]) $(id).addEventListener("input", () => { if (ranking) clearRanking("申请偏好已更改。请重新生成排名以应用新偏好。"); updateControls(); });
 $("result-search").addEventListener("input", renderResults);
 $("reconnect-button").addEventListener("click", () => void refreshStatus());
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { clearTimeout(timer); void poll(); } });

@@ -153,3 +153,6 @@
   .job-title { font-size: 14px; }
   .matcher-footer { flex-direction: column; gap: 5px; }
 }
+.matcher-page select { width: 100%; padding: 10px; border: 1px solid var(--line, #d8d6d0); border-radius: 5px; background: white; font: inherit; }
+.evidence-item { margin-block: 16px; padding-block: 12px; border-top: 1px solid #ddd; }
+.evidence-quote { margin: 6px 0 14px; padding: 10px 14px; border-left: 3px solid #6655e8; background: #f1eff9; white-space: pre-wrap; overflow-wrap: anywhere; }

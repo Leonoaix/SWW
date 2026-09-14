@@ -2,6 +2,8 @@
 
 本仓库在原 JSM 项目基础上增加了本地 WaterlooWorks 匹配工具：上传 PDF 简历，在专用浏览器手动登录学校账号，分页采集 Co-op Full-Cycle 职位与详情，生成最多 100 个职位的申请优先级并导出 CSV。
 
+默认采用 **DeepSeek 语义评估**：逐项提取岗位要求并引用简历经验证据，由代码验证引用并计算多维分数，再双向比较分数接近的岗位。DeepSeek key 放在根目录 `deepseek_api.txt`，或设置 `DEEPSEEK_API_KEY`；密钥文件被 Git 忽略。该模式会发送简历文本与职位内容到 DeepSeek API，并产生 API 费用。也可在页面选择本地基础匹配。
+
 ```bash
 ./scripts/setup-matcher.sh
 ./scripts/start-matcher.sh
