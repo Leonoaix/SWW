@@ -1,3 +1,20 @@
+# SWW — WaterlooWorks 简历匹配与申请排序
+
+本仓库在原 JSM 项目基础上增加了本地 WaterlooWorks 匹配工具：上传 PDF 简历，在专用浏览器手动登录学校账号，分页采集 Co-op Full-Cycle 职位与详情，生成最多 100 个职位的申请优先级并导出 CSV。
+
+```bash
+./scripts/setup-matcher.sh
+./scripts/start-matcher.sh
+```
+
+打开 **http://127.0.0.1:8765/waterlooworks**。需要 Python 3.10+、Node.js 20+；匹配工具可独立运行，无需启动原有 Go、MongoDB、Redis 或创建 JSM 账号。
+
+使用说明、评分规则、登录步骤及当前验证范围见 **[WATERLOOWORKS.md](WATERLOOWORKS.md)**。真实的 Top 100 需要你自己的简历和有效的 WaterlooWorks 登录。仓库不附带个人简历、登录会话或真实职位数据。
+
+原项目来源：[Icannotcode0/JSM](https://github.com/Icannotcode0/JSM)。保留原 Git 历史，`upstream` 指向原仓库，`origin` 指向本人的私有 SWW 仓库。下方保留原 JSM 文档；它描述的是原求职管理器。
+
+---
+
 # JSM — Job Search Manager
 
 A local-first job application tracker. Log every application, the resume version you sent, compensation notes, and where each one stands — on a pipeline board that runs entirely on your own machine.

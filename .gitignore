@@ -15,3 +15,12 @@ dist/
 
 # Uploaded resumes (Milestone 8) — user data, stored on local disk only
 uploads/
+
+# WaterlooWorks: private browser session, cached jobs and local exports
+.sww/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+output/

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sww-matcher"
+version = "0.1.0"
+description = "Local PDF resume matching for WaterlooWorks co-op jobs"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "python-multipart>=0.0.20,<1",
+  "pypdf>=6,<7",
+  "playwright>=1.51,<2",
+  "beautifulsoup4>=4.13,<5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "httpx>=0.27,<1"]
+
+[project.scripts]
+sww-matcher = "sww.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["sww*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

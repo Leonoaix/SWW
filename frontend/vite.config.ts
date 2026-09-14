@@ -13,6 +13,7 @@ function cleanUrls(): Plugin {
     "/login": "/login.html",
     "/signup": "/signup.html",
     "/dashboard": "/dashboard.html",
+    "/waterlooworks": "/waterlooworks.html",
   };
   return {
     name: "clean-urls",
@@ -53,6 +54,10 @@ export default defineConfig({
     // with the HTML shell, so every filtered or paged request silently returns
     // a page instead of JSON.
     proxy: {
+      "^/matcher-api(/|\\?|$)": {
+        target: "http://127.0.0.1:8765",
+        changeOrigin: false,
+      },
       "^/(health|logout|me|reset-password|applications)(/|\\?|$)": {
         target: BACKEND,
         changeOrigin: false,
@@ -93,6 +98,7 @@ export default defineConfig({
         login: resolve(__dirname, "login.html"),
         signup: resolve(__dirname, "signup.html"),
         dashboard: resolve(__dirname, "dashboard.html"),
+        waterlooworks: resolve(__dirname, "waterlooworks.html"),
       },
     },
   },

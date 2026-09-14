@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="在本机解析 PDF 简历，抓取已登录的 WaterlooWorks 职位，生成可解释的申请优先级。" />
+    <title>WaterlooWorks 职位匹配 · SWW</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="/src/waterlooworks.css" />
+  </head>
+  <body class="matcher-page">
+    <a class="skip-link" href="#matcher-main">跳转到主要内容</a>
+    <header class="matcher-nav">
+      <a class="matcher-brand" href="/"><span class="brand-mark">S</span><span>SWW <span class="brand-divider">/</span> WaterlooWorks</span></a>
+      <span id="service-status" class="service-status" role="status"><span class="connection-dot" aria-hidden="true"></span><span id="service-label">连接本地服务中</span></span>
+    </header>
+
+    <main id="matcher-main" class="matcher-main">
+      <section class="matcher-intro" aria-labelledby="page-title">
+        <div>
+          <p class="matcher-eyebrow">CO-OP JOB MATCHER</p>
+          <h1 id="page-title">下一份 co-op，<br /><em>从你的经历出发。</em></h1>
+          <p class="matcher-lede">上传简历，读取你能访问的 WaterlooWorks 职位，<br class="wide-only" />得到前 100 个值得优先查看的申请机会。</p>
+        </div>
+        <aside class="local-note">
+          <span class="local-icon" aria-hidden="true">↳</span>
+          <strong>在你的电脑上完成</strong>
+          <p>PDF 解析与匹配在本地运行。浏览器直接连接 WaterlooWorks；登录由你完成，无需注册 SWW 账户。</p>
+        </aside>
+      </section>
+
+      <div id="service-help" class="service-help" hidden>
+        <strong>尚未连接到本地匹配服务</strong>
+        <p>在项目目录首次运行 <code>./scripts/setup-matcher.sh</code>，然后运行 <code>./scripts/start-matcher.sh</code>。开发时请同时启动 Vite。</p>
+        <button id="reconnect-button" class="btn btn-ghost btn-sm" type="button">重新连接</button>
+      </div>
+      <p id="action-error" class="matcher-alert" role="alert" hidden></p>
+      <p id="action-message" class="matcher-message" role="status" hidden></p>
+
+      <div class="matcher-workspace">
+        <section class="setup-panel" aria-label="简历与职位来源">
+          <section class="setup-step" aria-labelledby="resume-heading">
+            <div class="step-heading"><span class="step-number">01</span><h2 id="resume-heading">你的简历</h2><span id="resume-indicator" class="step-indicator">待上传</span></div>
+            <form id="resume-form">
+              <label for="resume-file" class="upload-zone">
+                <span class="upload-icon" aria-hidden="true">↑</span>
+                <strong>选择 PDF 简历</strong>
+                <span>包含可选择的文本 · 最大 10 MB / 20 页</span>
+                <input id="resume-file" name="file" type="file" accept=".pdf,application/pdf" required aria-describedby="resume-hint" />
+              </label>
+              <p id="resume-hint" class="field-hint">扫描件请先进行 OCR，再上传带文字层的 PDF。</p>
+              <button id="upload-button" class="btn btn-primary" type="submit" disabled>解析简历</button>
+            </form>
+            <div id="resume-summary" class="resume-summary" hidden>
+              <p id="resume-filename" class="resume-filename"></p>
+              <p class="small-label">识别到的技能</p>
+              <div id="resume-skills" class="skill-list"></div>
+              <ul id="resume-warnings" class="warning-list" hidden></ul>
+            </div>
+          </section>
+
+          <section class="setup-step" aria-labelledby="source-heading">
+            <div class="step-heading"><span class="step-number">02</span><h2 id="source-heading">连接 WaterlooWorks</h2></div>
+            <p class="step-copy">打开本地浏览器，完成学校登录与双重验证，然后进入 Co-op Jobs 的职位列表。准备好后开始抓取。</p>
+            <div class="step-actions">
+              <button id="browser-button" class="btn btn-ghost" type="button" disabled>打开登录浏览器 ↗</button>
+              <a href="https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm" target="_blank" rel="noopener noreferrer" class="text-link">查看来源</a>
+            </div>
+            <p class="field-hint">请在服务打开的浏览器中登录，已有的其他浏览器登录状态不会自动共享。</p>
+            <div class="crawl-controls">
+              <div class="field"><label for="max-pages">最多抓取页数</label><input id="max-pages" type="number" min="1" max="500" value="100" /></div>
+              <div class="field"><label for="crawl-delay">请求间隔（秒）</label><input id="crawl-delay" type="number" min="2" max="30" step="0.5" value="2" /></div>
+            </div>
+            <div class="step-actions"><button id="crawl-button" class="btn btn-primary" type="button" disabled>开始抓取职位</button><button id="cancel-button" class="btn btn-ghost" type="button" hidden>停止抓取</button></div>
+            <div id="crawl-progress" class="crawl-progress" aria-live="polite" aria-atomic="true">
+              <div class="crawl-progress-head"><span id="crawl-state">尚未抓取</span><span class="tabular"><span id="crawl-count">0</span> 个职位 · <span id="crawl-pages">0</span> 页</span></div>
+              <p id="crawl-message">抓取会读取列表和职位详情，运行时间取决于职位数量。</p>
+            </div>
+            <ul id="crawl-issues" class="warning-list" hidden></ul>
+            <details class="import-details">
+              <summary>已有保存的职位 JSON？</summary>
+              <p class="field-hint">可导入职位数组或包含 jobs 数组的 JSON 文件。导入后会替换本地职位集。</p>
+              <label for="jobs-file" class="small-label">职位 JSON 文件</label>
+              <input id="jobs-file" type="file" accept=".json,application/json" />
+              <button id="import-button" class="btn btn-ghost btn-sm" type="button" disabled>导入职位</button>
+            </details>
+          </section>
+
+          <section class="setup-step" aria-labelledby="preferences-heading">
+            <div class="step-heading"><span class="step-number">03</span><h2 id="preferences-heading">申请偏好</h2><span class="optional-label">可选</span></div>
+            <p class="field-hint">优先角色与地点用于加分；排除关键词用于过滤。多个条目用逗号分隔。</p>
+            <div class="field"><label for="target-roles">优先角色</label><input id="target-roles" type="text" placeholder="如 Software Developer, Data Analyst" maxlength="1000" /></div>
+            <div class="field"><label for="locations">优先地点</label><input id="locations" type="text" placeholder="如 Waterloo, Toronto, Remote" maxlength="1000" /></div>
+            <div class="field"><label for="exclude-keywords">排除关键词</label><input id="exclude-keywords" type="text" placeholder="如 unpaid, senior" maxlength="1000" /></div>
+          </section>
+        </section>
+
+        <section class="results-panel" aria-labelledby="results-title">
+          <header class="results-heading">
+            <div><p class="matcher-eyebrow">YOUR APPLICATION SHORTLIST</p><h2 id="results-title">申请优先级 <span class="top-label">TOP 100</span></h2></div>
+            <button id="rank-button" class="btn btn-primary" type="button" disabled>生成排名 →</button>
+          </header>
+          <p class="ranking-note">根据简历与职位文本匹配，展示匹配理由和技能缺口。分数是相对优先级，不代表录用概率；申请前请确认资格、截止日期和职位要求。</p>
+          <div class="result-stats" aria-label="排名数据范围">
+            <div><span class="small-label">已收集职位</span><strong id="total-count" class="tabular">0</strong></div>
+            <div><span class="small-label">参与排名</span><strong id="eligible-count" class="tabular">—</strong></div>
+            <div><span class="small-label">本次推荐</span><strong id="ranked-count" class="tabular">—</strong></div>
+          </div>
+          <p id="coverage-note" class="coverage-note">尚无职位数据。排名范围以本次成功收集到的职位为准。</p>
+          <div id="results-toolbar" class="results-toolbar" hidden><label for="result-search" class="visually-hidden">筛选排名结果</label><input id="result-search" type="search" placeholder="在推荐中搜索公司、职位或地点" /><button id="export-button" class="btn btn-ghost btn-sm" type="button">导出 CSV ↓</button></div>
+          <p id="results-count" class="field-hint" aria-live="polite" hidden></p>
+          <div id="results-empty" class="results-empty"><span class="empty-symbol" aria-hidden="true">↗</span><h3>让经历，找到对应的机会。</h3><p id="empty-message">完成左侧的简历上传和职位抓取，<br />即可生成你的申请优先级。</p><span class="empty-footnote">只展示真实收集的职位 · 不自动提交申请</span></div>
+          <ol id="job-results" class="job-results" aria-label="职位申请优先级排名"></ol>
+          <details id="ranking-details" class="ranking-details" hidden><summary>匹配方法与排除记录</summary><p id="ranking-method"></p><ul id="excluded-jobs"></ul></details>
+        </section>
+      </div>
+    </main>
+    <footer class="matcher-footer"><span>SWW · WaterlooWorks 职位匹配</span><span>简历、本地浏览器会话与职位缓存保存在本机</span></footer>
+    <noscript><p class="matcher-alert">此工具需要 JavaScript，请启用后重新加载页面。</p></noscript>
+    <script type="module" src="/src/waterlooworks.ts"></script>
+  </body>
+</html>
