@@ -1,31 +1,29 @@
-# Local configuration. .env holds SESSION_SECRET and any future credentials —
-# it must never be committed. .env.example documents the keys instead.
+# Local configuration and credentials — never committed.
 .env
 .env.*
-!.env.example
+deepseek_api.txt
+*api_key*.txt
+*api-key*.txt
 
 # Dependencies and build output
 node_modules/
 dist/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
 
 # Editor / OS
 .idea/
 .vscode/
 .DS_Store
 
-# Uploaded resumes (Milestone 8) — user data, stored on local disk only
-uploads/
-
-# WaterlooWorks: private browser session, cached jobs and local exports
+# Local data: the crawler's browser profile, the job/cache database, the
+# embedding model, resumes and exports. All of it is personal.
 .sww/
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-*.egg-info/
+uploads/
 output/
-
-# Local API credentials (never publish, even to a private repository)
-deepseek_api.txt
-*api_key*.txt
-*api-key*.txt
+screenshots/
+*.pdf
+*.docx

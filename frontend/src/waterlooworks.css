@@ -156,3 +156,41 @@
 .matcher-page select { width: 100%; padding: 10px; border: 1px solid var(--line, #d8d6d0); border-radius: 5px; background: white; font: inherit; }
 .evidence-item { margin-block: 16px; padding-block: 12px; border-top: 1px solid #ddd; }
 .evidence-quote { margin: 6px 0 14px; padding: 10px 14px; border-left: 3px solid #6655e8; background: #f1eff9; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Resume decomposition: the split the matcher will actually use.
+   A fixed label column keeps every row aligned, so a long role title cannot
+   make one entry read differently from the next. */
+.resume-experiences {
+  list-style: none;
+  margin: 0 0 var(--s-4);
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.resume-experience {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: var(--s-2);
+  row-gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.resume-experience .skill-chip {
+  white-space: nowrap;
+}
+
+.resume-experience-name {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* Technologies sit under both columns rather than squeezing into a third. */
+.resume-experience .small-label {
+  grid-column: 1 / -1;
+}
+
+.resume-experience > .small-label:only-child {
+  grid-column: 1 / -1;
+}

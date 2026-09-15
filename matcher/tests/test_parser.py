@@ -1,4 +1,24 @@
-from sww.parser import JOBS_URL, login_required, parse_detail, parse_listing, safe_job_url
+from sww.jobs.parser import JOBS_URL, login_required, parse_detail, parse_listing, safe_job_url
+
+
+def test_freeform_location_does_not_absorb_following_description():
+    prose = "Company background and responsibilities. " * 100
+    html = f'''<div class="modal is--visible"><h2>Posting 123</h2>
+      <div class="is--long-form-reading"><p><strong>Location:</strong></p>
+      <p>Toronto, ON</p><p>{prose}</p></div></div>'''
+    detail = parse_detail(html, "123")
+    assert detail["location"] == "Toronto, ON"
+    assert prose.strip() in detail["description"]
+
+
+def test_structured_location_wins_over_embedded_location_label():
+    html = '''<div class="modal is--visible"><h2>Posting 123</h2>
+      <dl><dt>Job Location</dt><dd>Waterloo, ON</dd></dl>
+      <div class="is--long-form-reading"><strong>Location:</strong>Toronto<br>
+      <p>Other office information and responsibilities.</p></div></div>'''
+    detail = parse_detail(html, "123")
+    assert detail["location"] == "Waterloo, ON"
+    assert "Other office information" in detail["description"]
 
 
 def test_modern_table_uses_reordered_headers_and_handles_pagination():
@@ -43,6 +63,43 @@ def test_no_results_is_distinct_from_selector_mismatch():
     assert not mismatch.empty and not mismatch.recognized and not mismatch.end_confirmed
 
 
+def test_stale_empty_notice_and_action_icons_do_not_hide_job_title():
+    result = parse_listing('''<span hidden>0 results</span><p>1 results</p><table>
+      <tr><th>Actions</th><th>ID</th><th>Job Title</th><th>Organization</th></tr>
+      <tr><td><a href="?action=displayJob&amp;jobId=999">Print</a></td><td>488595</td>
+      <td><a href="#">Junior Software Developer</a></td><td>Example Inc</td></tr></table>''')
+    assert not result.empty
+    assert result.expected_total == 1
+    assert result.jobs[0]["id"] == "488595"
+    assert result.jobs[0]["title"] == "Junior Software Developer"
+    assert result.targets["488595"].url is None
+
+
+def test_standalone_overview_with_badge_and_stacked_labels():
+    html = '''<body><aside>Account private@example.org</aside><main>
+      <header><span>488595</span><h2>Junior Software Developer</h2></header>
+      <h3>JOB POSTING INFORMATION</h3>
+      <section><div><strong>Work Term:</strong></div><div>2027 - Winter</div></section>
+      <section><b>Job Title:</b><p>Junior Software Developer</p></section>
+      <section><b>Number of Job Openings:</b><p>2</p></section>
+      <section><b>Level:</b><ul><li>Junior</li><li>Intermediate</li></ul></section>
+      <section><b>Job Summary:</b><div><p>Build Python services.</p><p>Maintain SQL pipelines.</p></div></section>
+      <section><b>Required Skills:</b><ul><li>Python</li><li>SQL</li></ul></section>
+      <section><b>Application Deadline:</b><p>September 16, 2026</p></section>
+      </main></body>'''
+    detail = parse_detail(html, "488595")
+    assert detail["title"] == "Junior Software Developer"
+    assert detail["description"] == "Build Python services.\nMaintain SQL pipelines."
+    assert detail["requirements"] == "Python\nSQL"
+    assert detail["metadata"]["Work Term"] == "2027 - Winter"
+    assert detail["metadata"]["Number of Job Openings"] == "2"
+    assert detail["metadata"]["Level"] == "Junior\nIntermediate"
+    assert "2027 - Winter" in detail["metadata"]["detail_text"]
+    assert detail["deadline"] == "September 16, 2026"
+    assert "private@example.org" not in str(detail)
+    assert parse_detail(html, "488545") is None
+
+
 def test_unknown_pagination_does_not_claim_complete():
     result = parse_listing('''<table><tr><th>Job Title</th></tr><tr><td>
        <a href="?action=displayJob&amp;jobId=9">QA Intern</a></td></tr></table>''')
@@ -53,6 +110,28 @@ def test_unknown_pagination_does_not_claim_complete():
 def test_disabled_next_proves_last_page():
     result = parse_listing('<nav class="pagination"><button aria-label="Next page" disabled>Next</button></nav>')
     assert result.end_confirmed and result.next_page is None
+
+
+def test_collapsed_pagination_recognizes_previous_without_page_one():
+    result = parse_listing('''<p>812 results 801 - 812</p><nav class="pagination">
+      <button aria-label="Previous page">chevron_left</button>
+      <a href="#">16</a><a href="#" aria-current="page">17</a>
+      <button aria-label="Next page" disabled>chevron_right</button></nav>''')
+    assert result.current_page == 17 and not result.start_confirmed
+    assert result.previous_page and result.first_page is None
+    assert result.end_confirmed
+
+
+def test_first_page_icon_and_disabled_previous_boundary():
+    result = parse_listing('<button class="pagination__link" aria-label="First page">first_page</button>')
+    assert result.first_page
+    result = parse_listing('<button class="pagination__link" aria-label="Previous page" disabled>chevron_left</button>')
+    assert result.start_confirmed and result.previous_page is None
+
+
+def test_previous_numeric_page_is_a_fallback():
+    result = parse_listing('<nav class="pagination"><a href="#">16</a><a class="active" href="#">17</a></nav>')
+    assert result.previous_page and result.first_page is None
 
 
 def test_modal_requires_expected_id_and_extracts_requirements():

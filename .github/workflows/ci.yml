@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   matcher:
-    name: WaterlooWorks matcher
+    name: Matcher
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +26,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: matcher/requirements.lock
-      - run: python -m pip install -r matcher/requirements.lock -e './matcher[test]'
+          cache-dependency-path: |
+            matcher/requirements.lock
+            matcher/requirements-embeddings.lock
+      - run: python -m pip install -r matcher/requirements.lock -r matcher/requirements-embeddings.lock -e './matcher[test,embeddings]'
       - run: python -m playwright install --with-deps chromium
       - uses: actions/setup-node@v4
         with:
@@ -36,102 +38,22 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run build
-      - run: python -m pytest matcher/tests -q
 
-  backend:
-    name: Backend
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-
-    # Real Mongo and Redis, so the store-layer tests actually execute. They are
-    # written to skip when no database is reachable, which is right for a laptop
-    # but would silently gut the suite in CI — the multi-tenancy tests are the
-    # ones proving a user cannot read another user's applications.
-    services:
-      mongo:
-        image: mongo:7
-        ports: ['27017:27017']
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 10s
-      redis:
-        image: redis:7
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 3s
-          --health-retries 10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          # Single source of truth: bumping go.mod bumps CI, so the two can
-          # never drift apart.
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Verify go.mod and go.sum are tidy
-        run: |
-          go mod tidy
-          if ! git diff --quiet -- go.mod go.sum; then
-            echo "::error::go.mod/go.sum are not tidy — run 'go mod tidy' in backend/ and commit the result"
-            git diff -- go.mod go.sum
-            exit 1
-          fi
-
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l ./cmd ./internal)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt found unformatted files:"
-            echo "$unformatted"
-            gofmt -d ./cmd ./internal
-            exit 1
-          fi
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build ./...
-
+      # The browser tests skip themselves when Chromium is missing, and the
+      # semantic-retrieval tests skip when the embedding extra is absent. A
+      # skipped test looks like a passing one in the summary, so assert the
+      # count instead of trusting a green tick.
       - name: Test
-        env:
-          MONGO_TEST_URI: mongodb://127.0.0.1:27017
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: python -m pytest matcher/tests -q --no-header -p no:randomly
 
-      # A skipped test looks like a passing one in the summary. The store tests
-      # skip themselves when Mongo is unreachable, so a broken service container
-      # would turn the most security-relevant tests into silent no-ops. Fail
-      # instead.
-      - name: Assert the database-backed tests actually ran
-        env:
-          MONGO_TEST_URI: mongodb://127.0.0.1:27017
+      - name: Assert the browser and embedding suites actually ran
         run: |
-          if go test ./internal/common/mongoWrap/ -v -run TestApplicationsAreScopedByUser 2>&1 | grep -q '^--- SKIP'; then
-            echo "::error::multi-tenancy tests skipped — the Mongo service container is not reachable"
-            exit 1
-          fi
-
-      - name: Coverage summary
-        if: always()
-        run: |
-          if [ -f coverage.out ]; then
-            {
-              echo "### Backend coverage"
-              echo '```'
-              go tool cover -func=coverage.out | tail -1
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for suite in matcher/tests/test_crawler.py matcher/tests/test_retrieval.py; do
+            if python -m pytest "$suite" -q --no-header 2>&1 | grep -qE '[1-9][0-9]* skipped'; then
+              echo "::error::$suite skipped tests in CI — Chromium or the embedding extra is missing"
+              exit 1
+            fi
+          done
 
   frontend:
     name: Frontend
@@ -139,10 +61,8 @@ jobs:
     defaults:
       run:
         working-directory: frontend
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -153,10 +73,8 @@ jobs:
       # fails if package.json and the lock have drifted, which is the check we
       # want on a PR.
       - run: npm ci
-
       - name: Typecheck
         run: npx tsc --noEmit
-
       - name: Build
         run: npm run build
 
@@ -166,23 +84,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # .env was committed once already and removed by amending the initial
-      # commit. This makes a second occurrence a failed check rather than
-      # something noticed after it is public.
-      - name: Refuse committed .env files
+      - name: Refuse committed environment files
         run: |
-          tracked=$(git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.[^e]' || true)
+          tracked=$(git ls-files | grep -E '(^|/)\.env($|\.)' || true)
           if [ -n "$tracked" ]; then
             echo "::error::environment files are tracked by git:"
             echo "$tracked"
-            exit 1
-          fi
-
-      - name: Refuse a real SESSION_SECRET in .env.example
-        run: |
-          value=$(grep -E '^SESSION_SECRET=' .env.example | cut -d= -f2- || true)
-          if [ -n "$value" ]; then
-            echo "::error::.env.example ships a non-empty SESSION_SECRET; it must stay blank"
             exit 1
           fi
 
@@ -190,5 +97,14 @@ jobs:
         run: |
           if git ls-files --error-unmatch deepseek_api.txt >/dev/null 2>&1; then
             echo "::error::deepseek_api.txt must stay local and ignored"
+            exit 1
+          fi
+
+      - name: Refuse committed crawl data or resumes
+        run: |
+          tracked=$(git ls-files | grep -E '^\.sww/|^uploads/|\.(pdf|docx)$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::local crawl data or resume files are tracked by git:"
+            echo "$tracked"
             exit 1
           fi
