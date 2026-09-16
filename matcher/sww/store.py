@@ -242,6 +242,11 @@ class Store:
             rows = self._db.execute(f"SELECT * FROM jobs {clause} ORDER BY id").fetchall()
         return [self._row_to_job(row) for row in rows]
 
+    def job(self, job_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (str(job_id),)).fetchone()
+        return self._row_to_job(row) if row else None
+
     def job_count(self, *, on_board_only: bool = True) -> int:
         clause = "WHERE on_board = 1" if on_board_only else ""
         with self._lock:

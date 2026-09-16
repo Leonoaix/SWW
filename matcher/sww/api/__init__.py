@@ -141,6 +141,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
                 "has_resume": state["resume"] is not None, "resume": resume_summary(),
                 "source": state["source"], "collected_at": state["collected_at"],
                 "ai": state["ai"], "ai_config": ai_config(),
+                "browser": {"open": bool(getattr(browser, "is_open", False))},
                 "embeddings": {"available": embedding_available(), "model": config.EMBEDDING_MODEL},
                 "rerank": {"available": rerank_available(), "model": config.RERANK_MODEL,
                            "pool": config.RERANK_POOL},
@@ -208,6 +209,32 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         state["crawl"].update(state="login_required",
                               message="请在打开的浏览器完成学校登录和双重验证，进入 Co-op Jobs 职位列表。")
         return {"message": state["crawl"]["message"]}
+
+    @app.post("/matcher-api/jobs/{job_id}/open")
+    async def open_posting(job_id: str):
+        """Show one posting in the logged-in browser, ready to apply.
+
+        This is the "apply" button's destination, not an application: the
+        service never submits anything. Applying means choosing a resume
+        package and answering the employer's questions, it cannot be undone,
+        and doing it in bulk automatically is what gets an account flagged.
+        """
+        if busy():
+            raise HTTPException(409, "采集或评估进行中，请先停止再打开职位。")
+        job = await asyncio.to_thread(store.job, job_id)
+        if job is None:
+            raise HTTPException(404, "本机没有这个职位，请重新采集。")
+        if not getattr(browser, "is_open", False):
+            raise HTTPException(409, "登录浏览器未打开。请先点「打开登录浏览器」。")
+        async with state["browser_lock"]:
+            try:
+                destination = await browser.open_posting(job.get("url") or "")
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+            except Exception as exc:
+                raise HTTPException(503, "无法在登录浏览器中打开该职位。") from exc
+        return {"url": destination, "job_id": job_id,
+                "message": "已在登录浏览器中打开。本工具不会替你提交申请。"}
 
     async def run_crawl(options: CrawlOptions):
         async def progress(update):

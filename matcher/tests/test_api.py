@@ -258,3 +258,76 @@ def test_the_resume_summary_carries_the_dates_recency_is_scored_from(local):
     assert all(0 < item["recency"] <= 1 for item in experiences)
     # Newest first, so a length-capped prompt or query drops the oldest.
     assert experiences == sorted(experiences, key=lambda item: item["months_ago"])
+
+
+class OpenableCrawler(FakeCrawler):
+    """A login browser that records what it was asked to show."""
+
+    def __init__(self, is_open=True):
+        super().__init__()
+        self.is_open = is_open
+        self.opened = []
+
+    async def open_posting(self, url):
+        from sww.jobs.parser import safe_job_url
+        destination = safe_job_url(url)
+        if destination is None:
+            raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
+        self.opened.append(destination)
+        return destination
+
+
+def app_with_browser(tmp_path, crawler):
+    return create_app(tmp_path, crawler, embedder=None, reranker=None)
+
+
+def test_apply_opens_the_posting_in_the_logged_in_browser(tmp_path):
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        response = client.post("/matcher-api/jobs/123/open")
+        assert response.status_code == 200
+        assert crawler.opened == [job("123")["url"]]
+        assert "不会替你提交" in response.json()["message"]
+        assert client.get("/matcher-api/status").json()["browser"]["open"] is True
+
+
+def test_apply_needs_the_browser_and_a_known_posting(tmp_path):
+    closed = OpenableCrawler(is_open=False)
+    app = app_with_browser(tmp_path, closed)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        assert client.post("/matcher-api/jobs/123/open").status_code == 409
+        assert client.get("/matcher-api/status").json()["browser"]["open"] is False
+        assert closed.opened == []
+
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        assert client.post("/matcher-api/jobs/999/open").status_code == 404
+
+
+def test_apply_refuses_a_url_that_is_not_a_waterlooworks_posting(tmp_path):
+    """Job URLs are validated on import, but the browser is the thing being
+    pointed somewhere, so the refusal lives there too."""
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        app.state.store.replace_jobs([{**job("123"), "url": "https://evil.test/apply"}])
+        assert client.post("/matcher-api/jobs/123/open").status_code == 422
+        assert crawler.opened == []
+
+
+def test_apply_never_submits_an_application(tmp_path):
+    """The service opens the application page and stops there. Nothing in the
+    crawler may click Apply, and this is the endpoint most likely to drift."""
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        client.post("/matcher-api/jobs/123/open")
+    # The only interaction is a navigation to the read-only posting URL.
+    assert all(url.startswith("https://waterlooworks.uwaterloo.ca/") for url in crawler.opened)
+    assert not hasattr(crawler, "submitted")

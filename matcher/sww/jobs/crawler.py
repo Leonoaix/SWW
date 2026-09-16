@@ -151,6 +151,33 @@ class WaterlooWorksCrawler:
                 await self._settle(wait)
         raise CrawlStopped("failed", "未能确认 My Program 已开启。请在采集浏览器进入 Co-op 职位列表，打开 My Program（toggle_on），再重试；入口页的空结果不会算作采集完成。")
 
+    @property
+    def is_open(self) -> bool:
+        """Whether the dedicated login browser is up and usable."""
+        return self._context is not None
+
+    async def open_posting(self, url: str) -> str:
+        """Show one posting in the already-logged-in browser, in a new tab.
+
+        A new tab rather than the current one: the listing page holds the
+        user's filters and, during a crawl, the crawler's place in them.
+
+        This opens the application page. It does not apply. Submitting on
+        someone's behalf would pick a resume package, skip employer questions
+        and be irreversible — and bulk automated applying is exactly what gets
+        a student's account flagged. The same reason `_close_modal` refuses to
+        touch an Apply button.
+        """
+        destination = safe_job_url(url)
+        if destination is None:
+            raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
+        if self._context is None:
+            raise RuntimeError("The login browser is not open.")
+        page = await self._context.new_page()
+        await page.goto(destination, wait_until="domcontentloaded", timeout=45000)
+        await page.bring_to_front()
+        return destination
+
     async def open_browser(self) -> None:
         """Open a dedicated persistent profile for the user's manual login.
 

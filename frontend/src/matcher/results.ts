@@ -14,7 +14,13 @@
  * never renumbers the ones around it.
  */
 import { $, chips, element, externalLink, listMessages, message, safeJobUrl } from "./dom";
+import { hasOpened, markOpened } from "./applied";
+import { post } from "./client";
 import { type JsonObject, type Ranking, type RankedJob, string } from "./wire";
+
+/** Set by the page when the service reports the login browser is up. */
+let loginBrowserOpen = false;
+export const setLoginBrowserOpen = (value: boolean): void => { loginBrowserOpen = value; };
 
 const STATUS_LABELS: Record<string, string> = {
   direct: "直接经验", transferable: "可迁移经验", missing: "未体现",
@@ -88,11 +94,52 @@ function detailContent(job: RankedJob): Node[] {
              element("p", "job-text", job.requirements || "未单独提取到要求，请查看职位描述与原页面。"));
   parts.push(element("h4", "", "职位描述"),
              element("p", "job-text", job.description || "暂无详情文本，当前排名仅依据已收集的字段。请查看原职位。"));
-  const url = safeJobUrl(job.url);
-  parts.push(url
-    ? externalLink(url, "在 WaterlooWorks 查看并申请 ↗", "job-link")
-    : element("p", "field-hint", "未获得有效的 WaterlooWorks 职位链接，请在平台内按职位编号或名称搜索。"));
+  // No second link here: the row carries the apply action. Two controls with
+  // the same label and different behaviour — one routing through the login
+  // browser and recording the visit, one not — is worse than one.
   return parts;
+}
+
+/** The apply affordance: one click from the ranked row to the posting.
+ *
+ * It opens the application page. It never submits one — choosing a resume
+ * package and answering an employer's questions is not something to automate
+ * on someone's behalf, and it cannot be undone.
+ *
+ * When the service's login browser is up the posting opens there, already
+ * authenticated, in a new tab so a running board page keeps its filters.
+ * Otherwise this is an ordinary link, so middle-click and ctrl-click behave
+ * the way links do.
+ */
+function applyAction(job: RankedJob): HTMLElement {
+  const row = element("div", "job-actions");
+  const url = safeJobUrl(job.url);
+  const state = element("span", "job-applied-state");
+  const refresh = () => {
+    state.textContent = hasOpened(job.id) ? "已打开过申请页" : "";
+    state.hidden = !hasOpened(job.id);
+  };
+
+  if (!url) {
+    row.append(element("span", "field-hint",
+      `未获得有效职位链接，请在 WaterlooWorks 内按编号 ${job.id || "（未知）"} 搜索。`));
+    return row;
+  }
+
+  const link = externalLink(url, "去申请 ↗", "btn btn-primary btn-sm");
+  link.addEventListener("click", event => {
+    markOpened(job.id);
+    refresh();
+    if (!loginBrowserOpen) return;          // plain link: let the browser navigate
+    event.preventDefault();
+    link.setAttribute("aria-busy", "true");
+    void post(`/jobs/${encodeURIComponent(job.id)}/open`)
+      .catch(() => { window.open(url, "_blank", "noopener"); })
+      .finally(() => link.removeAttribute("aria-busy"));
+  });
+  row.append(link, state);
+  refresh();
+  return row;
 }
 
 function renderJob(job: RankedJob): HTMLLIElement {
@@ -124,6 +171,7 @@ function renderJob(job: RankedJob): HTMLLIElement {
   item.append(top);
 
   const body = element("div", "job-body");
+  body.append(applyAction(job));
   if (job.matched_skills.length) body.append(chips(job.matched_skills));
   if (job.reasons.length) {
     const reasons = element("ul", "job-reasons");

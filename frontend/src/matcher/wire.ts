@@ -38,6 +38,7 @@ export interface Resume {
 
 export interface Status {
   ai: JsonObject; ai_config: JsonObject; embeddings: JsonObject; rerank: JsonObject;
+  browser: JsonObject;
   crawl: {
     state: CrawlState; message: string; job_count: number; pages: number;
     errors: string[]; warnings: string[]; complete: boolean;
@@ -98,6 +99,7 @@ export function normalizeStatus(value: unknown): Status {
   return {
     ai: object(data.ai), ai_config: object(data.ai_config),
     embeddings: object(data.embeddings), rerank: object(data.rerank),
+    browser: object(data.browser),
     crawl: {
       state: (CRAWL_STATES.includes(state) ? state : "idle") as CrawlState,
       message: string(crawl.message), job_count: number(crawl.job_count), pages: number(crawl.pages),

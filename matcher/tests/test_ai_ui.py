@@ -83,6 +83,15 @@ def test_upload_import_ai_evidence_and_csv(tmp_path, width, extension, mime, bui
         page.locator(".job-detail summary").click()
         expect(page.locator(".evidence-quote")).to_have_count(2)
         assert page.evaluate("window.compromised") is None
+        # The apply affordance is on the row, not buried in the disclosure.
+        apply_link = page.locator(".job-result .job-actions a").first
+        expect(apply_link).to_have_text("去申请 ↗")
+        assert apply_link.get_attribute("target") == "_blank"
+        assert apply_link.get_attribute("rel") == "noopener noreferrer"
+        assert apply_link.get_attribute("href").startswith("https://waterlooworks.uwaterloo.ca/")
+        expect(page.locator(".job-applied-state")).to_be_hidden()
+        apply_link.click()
+        expect(page.locator(".job-applied-state")).to_have_text("已打开过申请页")
         # Detail bodies are built on first open, not for every collapsed row.
         collapsed = page.evaluate(
             "document.querySelectorAll('.job-detail:not([open]) .evidence-item').length")

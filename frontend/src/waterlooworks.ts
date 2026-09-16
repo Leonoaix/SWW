@@ -4,7 +4,7 @@
  */
 import { $, element, message, listMessages } from "./matcher/dom";
 import { post, request } from "./matcher/client";
-import { ResultsView } from "./matcher/results";
+import { ResultsView, setLoginBrowserOpen } from "./matcher/results";
 import { renderResume } from "./matcher/resume-panel";
 import {
   type CrawlState, type Ranking, type Status,
@@ -95,6 +95,7 @@ function renderStatus(status: Status): void {
         + `${status.crawl.state === "login_required" ? " 请在服务打开的浏览器完成登录。" : ""}`
       : "尚无职位数据。排名范围以本次成功收集到的职位为准。");
 
+  setLoginBrowserOpen(object(status.browser).open === true);
   renderResume(status.resume, status.has_resume);
   updateControls();
 }

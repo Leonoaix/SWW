@@ -194,3 +194,23 @@
 .resume-experience > .small-label:only-child {
   grid-column: 1 / -1;
 }
+
+/* The apply affordance sits on the row itself: reaching a posting should not
+   require expanding anything. */
+.job-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-bottom: 10px;
+}
+
+.job-applied-state {
+  font-size: 11px;
+  color: var(--ok);
+}
+
+.job-actions .btn[aria-busy="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
