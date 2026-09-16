@@ -129,3 +129,24 @@ def test_inputs_are_never_mutated():
     before = deepcopy(postings)
     eligible(postings, {"exclude_keywords": ["nothing"]}, profile=profile([4]), now=NOW)
     assert postings == before
+
+
+def test_the_duration_is_read_from_the_labelled_field_in_the_posting_body():
+    """The board writes the term as a labelled field in the detail text, and
+    for about one posting in ten that is the only place it appears. Missing it
+    made `shortest_term_months` return None, so every term filter silently
+    dropped those postings — 92 of 812 on a real board."""
+    job = {"title": "Software Developer, Co-op", "description": "", "requirements": "",
+           "metadata": {"detail_text": "Employment Location Arrangement:\nIn-person\n"
+                                       "Work Term Duration:\n4 month work term\n"
+                                       "Job Summary:\nWe have been building for 12 months."}}
+    assert shortest_term_months(job)[0] == 4
+
+
+def test_a_duration_elsewhere_in_the_body_is_not_read_as_the_term():
+    """Only the label's own value is taken. Scanning the whole body would read
+    "12 month roadmap" out of a job summary as a twelve-month work term."""
+    job = {"title": "Developer", "description": "", "requirements": "",
+           "metadata": {"detail_text": "Work Term Duration:\n8 month consecutive work term required\n"
+                                       "Job Summary:\nYou will own a 12 month roadmap."}}
+    assert shortest_term_months(job)[0] == 8

@@ -117,6 +117,14 @@ def required_term_months(job: dict) -> tuple[set[int], bool, str]:
     metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
     sources = [flatten(metadata.get(key)) for key in
                ("Work Term Duration", "work_term_duration", "Work Term", "Level")]
+    # The board writes the duration as a labelled field in the posting body,
+    # and for about one posting in ten that body is the only place it appears.
+    # Take the label's own value rather than scanning the whole text, so a
+    # "12 month" somewhere in the job summary cannot be read as the term.
+    detail = flatten(metadata.get("detail_text"))
+    labelled = re.search(r"Work Term Duration:\s*\n(.{0,120})", detail)
+    if labelled:
+        sources.append(labelled.group(1))
     sources += [flatten(job.get("requirements")), flatten(job.get("description")), flatten(job.get("title"))]
     for source in sources:
         if not source.strip():
