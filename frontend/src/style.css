@@ -56,23 +56,15 @@
   --accent-tint: #eeedfd;
   --accent-ring: rgba(79, 70, 229, 0.18);
 
+  /* Semantic accents. What is left of the pipeline palette, renamed for
+     the two jobs it still does. */
+  --ok: #047857;
+  --warn: #b45309;
+
   --danger: #be123c;
   --danger-tint: #fdeef1;
 
   /* ---- Status hues: the only non-accent colour in the system ------------ */
-  --status-applied: #4f46e5;
-  --status-applied-tint: #eeedfd;
-  --status-phone_screen: #b45309;
-  --status-phone_screen-tint: #fdf1dc;
-  --status-onsite: #7c3aed;
-  --status-onsite-tint: #f2ebfe;
-  --status-offer: #047857;
-  --status-offer-tint: #daf2e7;
-  --status-rejected: #be123c;
-  --status-rejected-tint: #fdeef1;
-  --status-withdrawn: #7a7a82;
-  --status-withdrawn-tint: #ececeb;
-
   /* ---- Space: 4px base, doubling-ish ----------------------------------- */
   --s-1: 4px;
   --s-2: 8px;
@@ -170,110 +162,9 @@ input {
   border-radius: var(--radius-sm);
 }
 
-/* ==========================================================================
-   Motion utilities
-   ========================================================================== */
-
-/* Scroll/entrance reveal. Elements start displaced and transparent; adding
-   .is-revealed transitions them home after their own --reveal-delay, which
-   motion.ts sets per sibling to build the stagger.
-
-   Every "start hidden" rule is scoped to html.js, a class an inline script in
-   the document head adds before first paint. If scripting is off or the module
-   fails to load, none of these rules ever match and the page renders as plain
-   static content instead of a blank screen. The .is-revealed rules are scoped
-   the same way purely so they keep winning on specificity. */
-html.js [data-reveal] {
-  opacity: 0;
-  transform: translate3d(0, var(--reveal-y, 18px), 0) scale(var(--reveal-scale, 1));
-  will-change: transform, opacity;
-}
-
-html.js [data-reveal].is-revealed {
-  opacity: 1;
-  transform: none;
-  transition:
-    opacity var(--dur-4) var(--ease-out) var(--reveal-delay, 0ms),
-    transform var(--dur-4) var(--ease-out) var(--reveal-delay, 0ms);
-}
-
-/* Once an element has landed, drop the compositor hint so we aren't holding a
-   layer for every revealed node on the page. */
-html.js [data-reveal].is-revealed.is-settled {
-  will-change: auto;
-}
-
-/* Editorial line reveal: each line sits in its own overflow-hidden box and
-   slides up from below the baseline, so the text appears to rise out of the
-   page rather than fade onto it. The padding/margin pair gives descenders
-   room so the clip doesn't shave the tails off g, y, p. */
-.line-mask {
-  display: block;
-  overflow: hidden;
-  padding-bottom: 0.12em;
-  margin-bottom: -0.12em;
-}
-
-.line-mask > span {
-  display: block;
-  transition: transform var(--dur-5) var(--ease-out) var(--reveal-delay, 0ms);
-}
-
-html.js .line-mask > span {
-  transform: translate3d(0, 110%, 0);
-}
-
-html.js .is-revealed > .line-mask > span,
-html.js .line-mask.is-revealed > span {
-  transform: none;
-}
-
-@keyframes shimmer {
-  to {
-    transform: translate3d(100%, 0, 0);
-  }
-}
-
-@keyframes pop {
-  0% {
-    transform: scale(1);
-  }
-  40% {
-    transform: scale(1.3);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes shake {
-  10%,
-  90% {
-    transform: translate3d(-2px, 0, 0);
-  }
-  30%,
-  70% {
-    transform: translate3d(4px, 0, 0);
-  }
-  50% {
-    transform: translate3d(-4px, 0, 0);
-  }
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-/* Very slow, very low-amplitude drift for the hero's background wash. Long
-   enough that it reads as ambient light rather than as an animation. */
-@keyframes drift {
-  from {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  to {
-    transform: translate3d(4%, -6%, 0) scale(1.12);
   }
 }
 
@@ -342,36 +233,6 @@ html.js .line-mask.is-revealed > span {
   box-shadow: var(--shadow-1);
 }
 
-.btn-block {
-  width: 100%;
-}
-
-.btn-lg {
-  padding: 13px 26px;
-  font-size: var(--text-base);
-  border-radius: var(--radius-md);
-}
-
-/* Arrow that nudges forward on hover — anticipation, borrowed from the
-   "affordance" school: the button shows you the direction it will take you. */
-.btn-arrow {
-  display: inline-block;
-  transition: transform var(--dur-3) var(--ease-spring);
-}
-
-.btn:hover:not(:disabled) .btn-arrow {
-  transform: translate3d(4px, 0, 0);
-}
-
-.btn-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 700ms linear infinite;
-}
-
 .brand-mark {
   width: 22px;
   height: 22px;
@@ -385,20 +246,6 @@ html.js .line-mask.is-revealed > span {
   font-weight: 700;
   letter-spacing: 0;
   transition: transform var(--dur-4) var(--ease-spring);
-}
-
-/* Stroke-draw on hover: the icon redraws itself stroke by stroke. --len is set
-   longer than any path in these icons, so a full dashoffset hides the shape
-   completely and animating back to 0 draws it in. This is the one place we
-   animate something other than transform/opacity — it's a 21px icon on hover,
-   so the paint cost is irrelevant, and no transform can express "redraw". */
-@keyframes draw {
-  from {
-    stroke-dashoffset: var(--len, 200);
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
 }
 
 .field {
@@ -472,18 +319,6 @@ input:-webkit-autofill:focus {
   font-size: var(--text-xs);
 }
 
-@keyframes backdrop-in {
-  from {
-    opacity: 0;
-  }
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--s-4);
-}
-
 .field .hint {
   font-weight: 400;
   color: var(--ink-subtle);
@@ -517,17 +352,6 @@ input:-webkit-autofill:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-ring);
-}
-
-.btn-danger {
-  background: transparent;
-  border-color: var(--border-strong);
-  color: var(--danger);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: var(--danger-tint);
-  border-color: var(--danger);
 }
 
 .field-hint {
