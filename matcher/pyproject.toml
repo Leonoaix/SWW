@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sww-matcher"
-version = "0.1.0"
-description = "Local PDF resume matching for WaterlooWorks co-op jobs"
+version = "0.2.0"
+description = "Local WaterlooWorks co-op job matching: resume decomposition, hybrid retrieval, evidence-grounded scoring"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -15,9 +15,14 @@ dependencies = [
   "playwright>=1.51,<2",
   "beautifulsoup4>=4.13,<5",
   "httpx>=0.27,<1",
+  "pydantic>=2.9,<3",
 ]
 
 [project.optional-dependencies]
+# Semantic retrieval. Optional on purpose: without it the matcher falls back to
+# BM25 and says so in the UI, rather than failing to start or quietly ranking
+# worse than it claims. Pulls in onnxruntime and numpy.
+embeddings = ["fastembed>=0.4,<1"]
 test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "httpx>=0.27,<1"]
 
 [project.scripts]
@@ -28,4 +33,5 @@ include = ["sww*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 asyncio_mode = "auto"

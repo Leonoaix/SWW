@@ -13,7 +13,7 @@
 .brand-divider { color: var(--ink-subtle); margin: 0 10px; font-weight: 400; }
 .service-status { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-muted); }
 .connection-dot { height: 7px; width: 7px; border-radius: 50%; background: var(--ink-subtle); flex: 0 0 auto; }
-.service-status[data-connected="true"] .connection-dot { background: var(--status-offer); }
+.service-status[data-connected="true"] .connection-dot { background: var(--ok); }
 .service-status[data-connected="false"] .connection-dot { background: var(--danger); }
 .matcher-main { max-width: 1440px; margin: auto; padding: 0 48px; }
 .matcher-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 60px; padding: 58px 0 48px; }
@@ -33,7 +33,7 @@
 .step-number { font-family: var(--font-mono); color: var(--accent); font-size: 11px; }
 .step-heading h2 { font-size: 15px; font-weight: 650; }
 .step-indicator, .optional-label { font-size: 10px; color: var(--ink-muted); margin-left: auto; }
-.step-indicator[data-ready="true"] { color: var(--status-offer); }
+.step-indicator[data-ready="true"] { color: var(--ok); }
 .upload-zone { background: var(--surface); border: 1px dashed var(--border-strong); border-radius: 7px; padding: 22px 15px 17px; display: flex; align-items: center; flex-direction: column; gap: 4px; cursor: pointer; }
 .upload-zone:hover, .upload-zone:focus-within { border-color: var(--accent); }
 .upload-icon { color: var(--accent); font-size: 26px; line-height: 1.2; margin-bottom: 6px; }
@@ -67,7 +67,7 @@
 .skill-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .skill-chip { font-size: 10px; background: var(--accent-tint); color: var(--accent); padding: 3px 7px; border-radius: 3px; }
 .skill-chip.missing { background: var(--surface-sunken); color: var(--ink-muted); }
-.warning-list { margin: 10px 0 0; padding-left: 16px; color: var(--status-phone_screen); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.warning-list { margin: 10px 0 0; padding-left: 16px; color: var(--warn); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
 .results-panel { padding-top: 30px; min-width: 0; }
 .results-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .results-heading .matcher-eyebrow { color: var(--ink-muted); font-size: 9px; margin-bottom: 7px !important; }
@@ -156,3 +156,41 @@
 .matcher-page select { width: 100%; padding: 10px; border: 1px solid var(--line, #d8d6d0); border-radius: 5px; background: white; font: inherit; }
 .evidence-item { margin-block: 16px; padding-block: 12px; border-top: 1px solid #ddd; }
 .evidence-quote { margin: 6px 0 14px; padding: 10px 14px; border-left: 3px solid #6655e8; background: #f1eff9; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Resume decomposition: the split the matcher will actually use.
+   A fixed label column keeps every row aligned, so a long role title cannot
+   make one entry read differently from the next. */
+.resume-experiences {
+  list-style: none;
+  margin: 0 0 var(--s-4);
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.resume-experience {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: var(--s-2);
+  row-gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.resume-experience .skill-chip {
+  white-space: nowrap;
+}
+
+.resume-experience-name {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* Technologies sit under both columns rather than squeezing into a third. */
+.resume-experience .small-label {
+  grid-column: 1 / -1;
+}
+
+.resume-experience > .small-label:only-child {
+  grid-column: 1 / -1;
+}

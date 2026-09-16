@@ -1,13 +1,20 @@
-# JSM Frontend — Design & Motion System
+# SWW Frontend — Design & Motion System
 
-Companion to `DESIGN_GUIDE.md` (architecture) and `API.md` (the wire contract).
-This document covers how the UI looks, how it moves, and how it defends itself
-against the backend's JSON.
+Companion to the pipeline description in [`../README.md`](../README.md). This
+document covers how the one page looks, how it moves, and how it defends itself
+against the local service's JSON.
 
 No runtime dependencies. No webfonts, no animation library. That isn't
-minimalism for its own sake — the landing page's central claim is that nothing
-leaves your machine, and a page that opens a connection to Google Fonts on load
+minimalism for its own sake — the page's central claim is that nothing leaves
+your machine, and a page that opens a connection to Google Fonts on load
 contradicts it.
+
+Two stylesheets, and the split is the whole organising idea:
+
+| File | Holds |
+|---|---|
+| `src/style.css` | The base layer: tokens, element defaults, easing, buttons, form fields. Anything a second page would also want. |
+| `src/waterlooworks.css` | Everything specific to the matcher page. |
 
 ---
 
@@ -16,27 +23,34 @@ contradicts it.
 **Swiss / International Typographic Style** (Müller-Brockmann) supplies the
 structure: a fixed spacing and type scale, hierarchy built from size and weight
 rather than ornament, generous negative space, and hairline rules where most UI
-kits would reach for a bordered box. The feature grid is the clearest case — the
-grid already groups the items, so a border around each card would say it twice.
+kits would reach for a bordered box. The setup column is the clearest case — the
+numbered steps and the rules between them already group the panel, so a border
+around each step would say it twice.
 
 **Dieter Rams** supplies the restraint. The rule the palette follows: colour
-beyond the single accent must *encode* something. That's why there is exactly
-one family of non-accent hues — the six pipeline statuses — and why they appear
-in the same three places every time (column top rule, header dot, card edge on
-hover). Nothing is coloured to be lively.
+beyond the single accent must *encode* something. There are exactly two
+non-accent hues left, and each has one job.
 
 ### Tokens (`src/style.css`, `:root`)
 
 | Group | Notes |
 |---|---|
 | Colour | Warm paper (`--paper: #f7f6f3`) against cool ink. Warm stock is a Swiss printing convention and keeps large white areas from reading clinical. |
-| Status | `--status-{applied,phone_screen,onsite,offer,rejected,withdrawn}` plus a `-tint` for each. |
+| Accent | `--accent` and its `-hover` / `-tint` / `-ring` variants. The only decorative colour. |
+| Semantic | `--ok` marks a completed step and the connected-service dot; `--warn` colours warning text; `--danger` is reserved for destructive affordances. Nothing else is coloured. |
 | Space | 4px base: `--s-1` … `--s-10`. |
-| Type | Major third (1.25) on a 16px base. `--text-display` is a `clamp()`. |
+| Type | Major third (1.25) on a 16px base, `--text-micro` … `--text-display`. |
+| Radius | `--radius-sm` … `--radius-xl`. |
 | Elevation | `--shadow-1` … `--shadow-4`, **two layers each** — a tight contact shadow plus a soft ambient one. Single-layer shadows are the main reason UI depth reads as fake. |
 
-Numerals that change in place (stat values, column counts) get `.tabular` so
-they don't reflow as they tick.
+Numerals that change in place (scores, counts) get `.tabular` so they don't
+reflow as they tick.
+
+> **Known inconsistency.** `waterlooworks.css` was written with raw values
+> (`clamp(30px, 3.5vw, 48px)`, `padding: 58px 0 48px`) rather than the type and
+> space tokens. The scale above is therefore the system's stated vocabulary, not
+> a description of every rule on the page. New rules should use the tokens; the
+> existing ones are worth converting when they are next touched.
 
 ---
 
@@ -44,115 +58,75 @@ they don't reflow as they tick.
 
 Derived from **Disney's twelve principles** (Thomas & Johnston) by way of
 **Material's** motion spec, which is itself a restatement of them for screens.
-
-### The four rules
+What survives here is the vocabulary and two rules, not a choreography system:
+the scroll-reveal, stagger and FLIP machinery belonged to the marketing and
+dashboard pages and went with them.
 
 1. **Asymmetric easing.** Entering elements use `--ease-out`
    (`cubic-bezier(0.22, 1, 0.36, 1)`, a quint-out): they cover most of the
    distance immediately, then settle. The eye reads the *start* of a motion, so
-   a fast start feels responsive and a slow one feels broken.
-2. **Duration scales with distance.** `--dur-1` (120ms) for a hover tint through
-   `--dur-5` (760ms) for a full headline. A button that eases over 500ms feels
-   mushy; a page section that snaps over 120ms feels violent.
-3. **Stagger, don't batch.** Related items arrive in sequence (~60ms apart).
-   This is follow-through and overlapping action: a group arriving in one frame
-   reads as a slab, a group arriving in sequence reads as related-but-distinct
-   items. The dashboard deliberately uses two different rates — columns sweep
-   across at 70ms, cards drop within a column at 55ms — so the board reads as a
-   wave rather than a grid switching on.
-4. **Only `transform` and `opacity`.** Both are composited, so neither triggers
+   a fast start feels responsive and a slow one feels broken. `--ease-spring`
+   adds a slight overshoot for affordances that should feel physical.
+2. **Duration scales with distance.** `--dur-1` (120ms) for a hover tint
+   through `--dur-5` (760ms). A button that eases over 500ms feels mushy; a
+   panel that snaps over 120ms feels violent.
+3. **Only `transform` and `opacity`.** Both are composited, so neither triggers
    layout or paint. Everything else is a frame-rate problem waiting to happen.
 
-Rule 4 has exactly two deliberate exceptions, both documented at their call
-site: the feature icons' `stroke-dashoffset` redraw (a 21px SVG on hover, where
-no transform can express "redraw"), and the `pipeline-seg` widths, which are set
-once via `flex-grow` and never animated — only the fill inside them scales.
-
-### Where the layout itself has to move: FLIP
-
-Moving a card between columns *is* a layout change. `flipMove()` in
-`src/motion.ts` uses **FLIP** (Paul Lewis): measure First, move it in the DOM
-and measure Last, Invert with a transform back to the start, then Play. The
-element is laid out twice and the travel is a pure transform. This drives the
-landing page's live board demo.
+One keyframe animation remains, `spin`, for in-flight indicators.
 
 ### Reduced motion
 
-`prefers-reduced-motion: reduce` collapses everything to the end state — no
-travel, no loops, no parallax. Elements still *appear*, they just don't animate
-in. `prefersReducedMotion()` is checked live rather than cached, so toggling the
-OS setting takes effect without a reload, and the JS-driven loops
-(`loopWhileVisible`, the board demo, `countUp`) opt out at the source rather
-than animating invisibly.
+`prefers-reduced-motion: reduce` collapses transitions and animations to their
+end state. Elements still *appear*, they just don't animate in. Because the page
+no longer drives any animation from JavaScript, this is now entirely a CSS
+concern and cannot desynchronise from what the scripts do.
 
 ### Not animating is also a decision
 
-Idle loops stop when off-screen or backgrounded (`loopWhileVisible`), reveals
-fire once rather than replaying on every scroll, and `will-change` is dropped
-after an element lands (`.is-settled`) instead of holding a compositor layer for
-the life of the page.
-
-### Failing safe
-
-Every "start hidden" rule is scoped to `html.js`, a class an inline script in
-each document head sets before first paint. With scripting off or a module that
-fails to load, none of those rules match and the pages render as ordinary static
-content rather than as a blank screen.
+The results list is the page's one expensive surface, and it is deliberately
+static: rows do not animate in, and filtering toggles `hidden` rather than
+transitioning. Animating a hundred rows on every keystroke is how a search box
+starts dropping frames.
 
 ---
 
 ## 3. The API boundary
 
-`src/types.ts` carries **two** layers, and the split is load-bearing:
+`src/matcher/wire.ts` carries the wire types and, more importantly, the
+coercions. The local service is trusted to be *ours*; it is not trusted to be
+*correct*. A version mismatch, a partial result, or a field the server stopped
+sending must degrade the page, never throw inside a render loop.
 
-- `Wire*` — exactly what the Go handlers put on the wire.
-- plain (`Application`, `User`) — the normalized shape the UI consumes, where
-  every collection is guaranteed to be an array and every optional field is
-  explicitly `null`.
+Every value crosses the boundary through `object()`, `string()`, `number()`,
+`maybeNumber()` or `strings()`. None of them can throw:
 
-The reason is that Go has two different ways of saying "empty" and they don't
-look the same in JSON:
-
-```go
-[]string                    nil  ->  null      // key present, value null
-[]T   with `,omitempty`     nil  ->  <absent>  // key not emitted at all
-*T    with `,omitempty`     nil  ->  <absent>
+```ts
+strings(job.warnings)      // [] if absent, null, a string, or a list of objects
+maybeNumber(job.score)     // null rather than NaN
+object(data.rerank)        // {} if the server predates the field
 ```
 
-In `internal/domain/application.go`, `location` and `tags` have no `omitempty`,
-so they arrive as `null`; `compensation`, `resumes`, and `next_follow_up_at` do
-have it, so they arrive as `undefined`. Declaring all five as plain required
-properties — which is what the frontend did before — means `app.tags.slice(0, 2)`
-throws on the first application saved without tags.
+That is why adding `rerank` and `requirement_chunks_used` to the status and
+ranking payloads needed no version negotiation: an older service simply reports
+them as absent and the page renders the stages it can confirm.
 
-`normalizeApplication()` in `src/api.ts` collapses both cases at the boundary,
-so nothing downstream has to think about it. `mockData.ts` is typed as
-`WireApplication[]` and its last row (Soylent Corp) is deliberately the sparsest
-possible record — `null` slices, every `omitempty` field absent — so a
-regression in the normalizer fails in development rather than in production.
+`normalizeRanking()` also precomputes each job's lowercase `search` haystack, so
+filtering never rebuilds strings per keystroke.
 
-Two related notes:
+### Two rules the page holds to
 
-- **Paging is real, not stubbed.** `getApplications()` walks every page of the
-  `{applications, page, page_size, total}` envelope. The dashboard's stat tiles
-  and pipeline bar are aggregates, so a single page would silently report wrong
-  totals past `page_size` with nothing on screen to indicate truncation.
-- **Unknown statuses are surfaced, not rewritten.** `status` is an unvalidated
-  `string` server-side. `normalizeStatus()` warns and passes the value through
-  rather than coercing it to a real status, which would misreport the pipeline.
+- **Never `innerHTML`.** Job text and model explanations are untrusted and reach
+  the DOM only through `textContent` (`matcher/dom.ts`). The frontend
+  integration test asserts an `<img onerror>` payload in a model explanation
+  renders as text.
+- **Say which signals actually ran.** Embeddings and reranking are optional. The
+  page reports whether each stage happened rather than implying a full cascade,
+  so a weaker ranking is never presented as a stronger one.
 
-### Still to do before the mock comes out
+### A note on reproducibility
 
-Tracked as `TODO`s in `src/api.ts`:
-
-- CSRF: every mutating request needs an `X-CSRF-TOKEN` header echoing the CSRF
-  cookie, plus `credentials: "include"`. The cookie is correctly not `HttpOnly`,
-  but its **name isn't configured server-side yet** — `NewSessionManager` takes a
-  `csrfCookieName` and has no callers.
-- `isAuthenticated()` must become async (`GET /me`, 401 = logged out). The
-  session cookie is `HttpOnly`, so JS can never read it directly. Callers
-  currently branch synchronously at module load; that shape has to change.
-- `GET /me` returns a `{"user": {…}}` envelope to unwrap.
-- `POST /login`: `API.md` documents `{"user": {…}}`; the implemented handler
-  returns `{"status": "ok"}`. Worth reconciling — returning the user would let
-  the dashboard skip a round trip.
+Scores are deterministic within a process. Across processes the local
+cross-encoder can differ by about 0.1 on a 0–100 score, from ONNX runtime thread
+scheduling. Ordering is unaffected in practice, but the numbers are not
+bit-reproducible and should not be compared across runs at that precision.

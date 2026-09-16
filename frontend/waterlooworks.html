@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="在本机解析 PDF 简历，抓取已登录的 WaterlooWorks 职位，生成可解释的申请优先级。" />
+    <meta name="description" content="在本机解析 PDF、DOCX 或 MD 简历，抓取已登录的 WaterlooWorks 职位，生成可解释的申请优先级。" />
     <title>WaterlooWorks 职位匹配 · SWW</title>
     <link rel="stylesheet" href="/src/style.css" />
     <link rel="stylesheet" href="/src/waterlooworks.css" />
@@ -25,7 +25,7 @@
         <aside class="local-note">
           <span class="local-icon" aria-hidden="true">↳</span>
           <strong>经历与岗位，逐项核对</strong>
-          <p>PDF 在本机解析。DeepSeek 模式会把简历文本和职位内容发送至 DeepSeek API，依据具体经历评估岗位要求；学校登录仍在本机完成。</p>
+          <p>PDF / DOCX / MD 简历在本机解析。DeepSeek 模式会把简历文本和职位内容发送至 DeepSeek API，依据具体经历评估岗位要求；学校登录仍在本机完成。</p>
         </aside>
       </section>
 
@@ -44,24 +44,32 @@
             <form id="resume-form">
               <label for="resume-file" class="upload-zone">
                 <span class="upload-icon" aria-hidden="true">↑</span>
-                <strong>选择 PDF 简历</strong>
-                <span>包含可选择的文本 · 最大 10 MB / 20 页</span>
-                <input id="resume-file" name="file" type="file" accept=".pdf,application/pdf" required aria-describedby="resume-hint" />
+                <strong>选择 PDF、DOCX 或 MD 简历</strong>
+                <span>包含可读取的文字 · 最大 10 MiB · PDF 最多 20 页</span>
+                <input id="resume-file" name="file" type="file" accept=".md,.markdown,text/markdown,text/plain,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required aria-describedby="resume-hint" />
               </label>
-              <p id="resume-hint" class="field-hint">扫描件请先进行 OCR，再上传带文字层的 PDF。</p>
+              <p id="resume-hint" class="field-hint">支持 PDF、Word DOCX 和 UTF-8 Markdown（.md / .markdown）；旧版 .doc 请另存为 .docx。扫描件及图片中的文字需先进行 OCR。</p>
               <button id="upload-button" class="btn btn-primary" type="submit" disabled>解析简历</button>
             </form>
             <div id="resume-summary" class="resume-summary" hidden>
               <p id="resume-filename" class="resume-filename"></p>
-              <p class="small-label">识别到的技能</p>
+              <p id="resume-headline" class="field-hint"></p>
+              <p class="small-label">简历拆分</p>
+              <ul id="resume-experiences" class="resume-experiences"></ul>
+              <p class="small-label">在工作或项目中实际用过的技能</p>
               <div id="resume-skills" class="skill-list"></div>
+              <p class="small-label">仅出现在技能清单中（不作为经验证据）</p>
+              <div id="resume-listed-skills" class="skill-list"></div>
+              <p id="resume-availability" class="field-hint"></p>
               <ul id="resume-warnings" class="warning-list" hidden></ul>
             </div>
           </section>
 
           <section class="setup-step" aria-labelledby="source-heading">
             <div class="step-heading"><span class="step-number">02</span><h2 id="source-heading">连接 WaterlooWorks</h2></div>
-            <p class="step-copy">打开本地浏览器，完成学校登录与双重验证，然后进入 Co-op Jobs 的职位列表。准备好后开始抓取。</p>
+            <p class="step-copy">打开本地浏览器，完成学校登录与双重验证，然后进入 Co-op Jobs 职位列表。采集会开启 My Program，读取与你专业相关的岗位。</p>
+            <p class="field-hint">自动续抓：24 小时内已读完的岗位详情会复用，仅补抓未完成、新增或已过期的详情。每读完一个岗位自动保存，修改请求间隔后也可继续；重启服务后进度仍保留。再次抓取会先核对列表。</p>
+            <p class="field-hint">详情读取或校验失败会立即自动重试 2 次；仍失败则跳过该详情，继续采集后续岗位。</p>
             <div class="step-actions">
               <button id="browser-button" class="btn btn-ghost" type="button" disabled>打开登录浏览器 ↗</button>
               <a href="https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm" target="_blank" rel="noopener noreferrer" class="text-link">查看来源</a>
@@ -74,7 +82,7 @@
             <div class="step-actions"><button id="crawl-button" class="btn btn-primary" type="button" disabled>开始抓取职位</button><button id="cancel-button" class="btn btn-ghost" type="button" hidden>停止抓取</button></div>
             <div id="crawl-progress" class="crawl-progress" aria-live="polite" aria-atomic="true">
               <div class="crawl-progress-head"><span id="crawl-state">尚未抓取</span><span class="tabular"><span id="crawl-count">0</span> 个职位 · <span id="crawl-pages">0</span> 页</span></div>
-              <p id="crawl-message">抓取会读取列表和职位详情，运行时间取决于职位数量。</p>
+              <p id="crawl-message">先确认 My Program 已开启，每页读完岗位详情后再翻页；运行时间取决于职位数量。</p>
             </div>
             <ul id="crawl-issues" class="warning-list" hidden></ul>
             <details class="import-details">
@@ -92,14 +100,20 @@
             <div class="field"><label for="target-roles">优先角色</label><input id="target-roles" type="text" placeholder="如 Software Developer, Data Analyst" maxlength="1000" /></div>
             <div class="field"><label for="locations">优先地点</label><input id="locations" type="text" placeholder="如 Waterloo, Toronto, Remote" maxlength="1000" /></div>
             <div class="field"><label for="exclude-keywords">排除关键词</label><input id="exclude-keywords" type="text" placeholder="如 unpaid, senior" maxlength="1000" /></div>
+            <div class="field"><label for="max-term-months">可接受的最长工期（月）</label><input id="max-term-months" type="number" min="0" max="24" placeholder="留空＝跟随简历" /></div>
+            <p class="field-hint">最短工期超过这个数的岗位会被排除，理由里附岗位原文。留空则取简历中写明的可用工期；填 0 关闭此项。同时接受更短工期的岗位（如「8 个月优先，4 个月同等合格」）不会被排除。</p>
+            <label class="field-hint"><input id="exclude-restricted-eligibility" type="checkbox" checked aria-describedby="eligibility-hint" /> 排除 SWPP／强制公民或 PR 身份要求的岗位</label>
+            <p id="eligibility-hint" class="field-hint">默认开启。命中 SWPP（含全称）或明确要求公民／永久居民身份时排除；仅优先考虑这些身份的岗位保留。两种排序方式均适用，可在排除记录中查看原因。</p>
           </section>
           <section class="setup-step" aria-labelledby="engine-heading">
             <div class="step-heading"><span class="step-number">04</span><h2 id="engine-heading">匹配方式</h2></div>
             <div class="field"><label for="ranking-engine">排序引擎</label><select id="ranking-engine"><option value="deepseek" selected>DeepSeek · 经验证据与语义评估</option><option value="local">本地基础匹配 · 不发送数据</option></select></div>
             <p id="ai-config" class="field-hint">正在检查 DeepSeek 配置…</p>
-            <p class="field-hint">DeepSeek 将评估所有未被规则排除的职位；先移除常见邮箱、电话和链接，但不保证匿名化。API 按实际 token 用量计费，结果会在本机缓存。</p>
-            <div class="field"><label for="ai-max-jobs">本次 AI 评估职位上限</label><input id="ai-max-jobs" type="number" min="1" max="10000" value="500" /></div>
-            <p class="field-hint">超出上限会提示调整，不会按关键词偷偷丢弃候选职位。</p>
+            <p id="embedding-status" class="field-hint"></p>
+            <p id="rerank-status" class="field-hint"></p>
+            <p class="field-hint">级联：本机先用混合检索排全部职位，再用本地 cross-encoder 对最有希望的一批逐对精算，最后只把存活的若干个送去调用模型。前两步不联网不计费。岗位要求的抽取结果按职位缓存，改简历不会作废。发送前会移除常见邮箱、电话和链接，但不保证匿名化。</p>
+            <div class="field"><label for="ai-shortlist">送入模型评估的候选数量</label><input id="ai-shortlist" type="number" min="0" max="10000" value="50" /></div>
+            <p class="field-hint">填 0 表示对所有合格职位全量评估（最贵）。未评估的职位数量会在结果中明确显示，不会假装是完整排名。</p>
             <div id="ai-progress" class="crawl-progress" aria-live="polite" hidden><p id="ai-message"></p><p id="ai-usage" class="field-hint"></p><button id="ai-cancel" type="button" class="btn btn-ghost btn-sm">停止 AI 评估</button></div>
           </section>
         </section>

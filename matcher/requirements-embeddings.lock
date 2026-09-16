@@ -1,0 +1,13 @@
+# Pins for the optional `embeddings` extra (semantic retrieval).
+# Install with: pip install -r matcher/requirements-embeddings.lock
+fastembed==0.8.0
+huggingface_hub==1.31.0
+loguru==0.7.3
+mmh3==5.3.0
+numpy==2.5.3
+onnxruntime==1.30.0
+pillow==12.3.0
+py_rust_stemmers==0.1.8
+requests==2.34.2
+tokenizers==0.23.2
+tqdm==4.70.1

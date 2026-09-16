@@ -32,9 +32,9 @@ def pdf_bytes(text="Python, SQL, React. Software developer.", pages=1, encrypted
 
 def test_extracts_actual_pdf_text_and_canonical_skills():
     result = extract_resume(pdf_bytes("Software developer: Python, PostgreSQL, React.js and TypeScript."))
-    assert "Software developer" in result["text"]
-    assert result["skills"] == ["PostgreSQL", "Python", "React", "TypeScript"]
-    assert "Very little" in result["warnings"][0]
+    assert "Software developer" in result.text
+    assert extract_skills(result.text) == ["PostgreSQL", "Python", "React", "TypeScript"]
+    assert "Very little" in result.warnings[0]
 
 
 @pytest.mark.parametrize("data", [b"", b"not a pdf", b"%PDF-1.7\nnot a valid document", "not bytes"])
@@ -65,7 +65,7 @@ def test_rejects_too_many_pages():
 
 def test_accepts_twenty_pages_and_warns_on_missing_text():
     result = extract_resume(pdf_bytes(pages=20))
-    assert any("19 page(s)" in warning for warning in result["warnings"])
+    assert any("19 page(s)" in warning for warning in result.warnings)
 
 
 def test_rejects_excessive_extracted_text():
