@@ -3,7 +3,7 @@ import pytest
 
 from conftest import FakeClient, NOW, RESUME
 from sww.llm import DeepSeekError, Extractor
-from sww.resume import build_profile, prompt_payload, verify_quote
+from sww.resume import ResumeAnalysis, build_profile, prompt_payload, refresh_recency, verify_quote
 from sww.resume.skills import demonstrated_skills
 from sww.resume.segment import segment
 
@@ -87,3 +87,27 @@ async def test_model_split_cannot_override_a_stated_duration(store):
 async def test_oversized_resume_is_refused_rather_than_truncated(store):
     with pytest.raises(DeepSeekError, match="40,000|上限"):
         await build_profile("x " * 30_000, Extractor(FakeClient(), store, "test"))
+
+
+async def test_a_stored_analysis_is_dated_from_today_not_from_when_it_was_written():
+    """The analysis is kept across restarts, and `months_ago` is a distance
+    from today rather than a fact about the resume. Recency is a scored
+    dimension, so reading one back unchanged would rank as though no time had
+    passed since the upload."""
+    from datetime import date
+
+    analysis = await build_profile(RESUME, now=NOW)
+    written = [item.months_ago for item in analysis.profile.experiences]
+    assert written and all(months is not None for months in written)
+
+    stored = ResumeAnalysis.model_validate_json(analysis.model_dump_json())
+    assert [item.months_ago for item in stored.profile.experiences] == written
+    assert stored.text == analysis.text
+
+    a_year_later = refresh_recency(stored, now=date(NOW.year + 1, NOW.month, NOW.day))
+    assert [item.months_ago for item in a_year_later.profile.experiences] == [m + 12 for m in written]
+    # Newest first is derived from these distances and is load-bearing: the
+    # cross-encoder query and the model payload are both length-capped.
+    months = [item.months_ago for item in a_year_later.profile.experiences]
+    assert months == sorted(months)
+    assert all(item.recency < 1.0 for item in a_year_later.profile.experiences)

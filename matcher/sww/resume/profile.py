@@ -201,6 +201,23 @@ def _most_recent_first(items: list[ExperienceItem]) -> list[ExperienceItem]:
                                            item.months_ago if item.months_ago is not None else 0))
 
 
+def refresh_recency(analysis: "ResumeAnalysis", now=None) -> "ResumeAnalysis":
+    """Recompute how long ago each experience ended, in place.
+
+    `months_ago` is a distance from today, so an analysis that was stored and
+    read back later carries a stale one — and recency is a scored dimension,
+    so stale means mis-ranked. Unlike the rest of the analysis it costs
+    nothing to derive again: the end dates are already in the blocks.
+    """
+    blocks = {block.id: block for block in analysis.blocks}
+    for item in analysis.profile.experiences:
+        item.months_ago = _months_ago(blocks.get(item.block_id), now)
+    # The order is derived from these distances and is load-bearing: the
+    # cross-encoder query and the model payload are both length-capped.
+    analysis.profile.experiences = _most_recent_first(analysis.profile.experiences)
+    return analysis
+
+
 def _months_ago(block: Optional[Block], now=None) -> Optional[int]:
     """Months since this block's experience ended; 0 while ongoing."""
     if block is None:

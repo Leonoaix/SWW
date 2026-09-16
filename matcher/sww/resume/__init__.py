@@ -6,7 +6,8 @@ from ..config import (
 from .documents import Document, extract_resume
 from .profile import (
     Availability, CandidateProfile, EducationItem, ExperienceItem, ResumeAnalysis,
-    SkillClaim, build_profile, heuristic_profile, prompt_payload, verify_quote,
+    SkillClaim, build_profile, heuristic_profile, prompt_payload, refresh_recency,
+    verify_quote,
 )
 from .segment import Block, block_containing, evidence_text, prepare, segment
 from .skills import SKILL_ALIASES, demonstrated_skills, extract_skills, find_mentions
@@ -20,5 +21,6 @@ __all__ = [
     "Availability", "Block", "CandidateProfile", "Document", "EducationItem", "ExperienceItem",
     "ResumeAnalysis", "SKILL_ALIASES", "SkillClaim", "block_containing", "build_profile",
     "demonstrated_skills", "evidence_text", "extract_resume", "extract_skills", "find_mentions",
-    "heuristic_profile", "prepare", "prompt_payload", "segment", "verify_quote",
+    "heuristic_profile", "prepare", "prompt_payload", "refresh_recency", "segment",
+    "verify_quote",
 ]

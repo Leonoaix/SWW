@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from conftest import RESUME, job, seed_jobs, seed_resume
 from sww.api import create_app
 from sww.config import MAX_BODY_BYTES as MAX_BODY
+from sww.store import Store
 from test_docx import docx_bytes
 from test_resume import pdf_bytes
 
@@ -386,3 +387,69 @@ def test_a_posting_with_a_real_address_opens_that_address(tmp_path):
         assert body["opened"] == "page"
         assert crawler.opened == [real]
         assert crawler.clicked == []
+
+
+def restart(tmp_path):
+    """A second service over the same data directory is what a restart is."""
+    return create_app(tmp_path, FakeCrawler(), embedder=None, reranker=None)
+
+
+def test_a_resume_and_its_ranking_survive_a_restart(tmp_path):
+    """Both used to live only in the process, so every restart silently threw
+    away an upload and an evaluation that had cost real model calls."""
+    app = restart(tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123"), job("456", "Data Engineer", "Python pipelines and SQL")])
+        uploaded = client.post("/matcher-api/resume",
+                               files={"file": ("private.md", RESUME.encode(), "text/markdown")})
+        assert uploaded.status_code == 200
+        ranked = client.post("/matcher-api/rank", json={}).json()
+        assert ranked["jobs"]
+
+    with TestClient(restart(tmp_path), base_url="http://127.0.0.1:8765",
+                    headers={"X-SWW-Client": "1"}) as client:
+        status = client.get("/matcher-api/status").json()
+        assert status["has_resume"] is True
+        assert status["resume"]["filename"] == "private.md"
+        assert status["resume"]["skills"] == uploaded.json()["skills"]
+        assert status["ranking"] == {"available": True, "engine": ranked["engine"]}
+        restored = client.get("/matcher-api/ranking").json()
+        assert [entry["id"] for entry in restored["jobs"]] == [entry["id"] for entry in ranked["jobs"]]
+        # Export reads the same ranking, so it works without ranking again.
+        assert client.get("/matcher-api/export.csv").status_code == 200
+
+
+def test_uploading_a_new_resume_drops_the_ranking_made_from_the_old_one(tmp_path):
+    app = restart(tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        client.post("/matcher-api/resume", files={"file": ("a.md", RESUME.encode(), "text/markdown")})
+        assert client.post("/matcher-api/rank", json={}).status_code == 200
+        client.post("/matcher-api/resume", files={"file": ("b.md", RESUME.encode(), "text/markdown")})
+        assert client.get("/matcher-api/status").json()["ranking"]["available"] is False
+
+    with TestClient(restart(tmp_path), base_url="http://127.0.0.1:8765",
+                    headers={"X-SWW-Client": "1"}) as client:
+        assert client.get("/matcher-api/status").json()["resume"]["filename"] == "b.md"
+        assert client.get("/matcher-api/ranking").status_code == 409
+
+
+def test_state_written_by_an_incompatible_version_is_discarded_not_fatal(tmp_path):
+    """Losing a stored blob is exactly as bad as never having stored it. A
+    service that will not start is much worse."""
+    app = restart(tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        seed_jobs(app, [job("123")])
+        client.post("/matcher-api/resume", files={"file": ("a.md", RESUME.encode(), "text/markdown")})
+    store = Store(tmp_path)
+    store.set_meta("state:resume", '{"text": 5, "unknown_field": true}')
+    store.set_meta("state:ranking", "not json at all")
+    store.close()
+
+    with TestClient(restart(tmp_path), base_url="http://127.0.0.1:8765",
+                    headers={"X-SWW-Client": "1"}) as client:
+        status = client.get("/matcher-api/status").json()
+        assert status["has_resume"] is False
+        assert status["ranking"]["available"] is False
+        # The unreadable blobs are cleared rather than re-read on every start.
+        assert Store(tmp_path).get_meta("state:resume") == ""

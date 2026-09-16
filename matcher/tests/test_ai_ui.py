@@ -186,3 +186,46 @@ def test_a_posting_with_no_address_asks_the_service_instead_of_linking(tmp_path)
         assert crawler.opened == []
         assert not errors
         browser.close()
+
+
+@pytest.mark.skipif(not (ROOT / "frontend/dist/waterlooworks.html").exists(), reason="Build frontend to run browser integration")
+def test_a_restart_keeps_the_resume_and_the_results_on_screen(tmp_path):
+    """What a restart used to cost: the upload and the ranking both vanished
+    while the job database sat there intact."""
+    first = create_app(tmp_path, FakeCrawler(), embedder=None, reranker=None)
+    with TestClient(first, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as http:
+        posting = job("1", "Backend Intern", "Develop reliable event-driven services.")
+        http.post("/matcher-api/jobs/import", json={"jobs": [posting]})
+        http.post("/matcher-api/resume",
+                  files={"file": ("private.md", RESUME.encode(), "text/markdown")})
+        assert http.post("/matcher-api/rank", json={}).json()["jobs"]
+
+    restarted = create_app(tmp_path, FakeCrawler(), embedder=None, reranker=None)
+    with TestClient(restarted, base_url="http://127.0.0.1:8765") as http, sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, channel=os.environ.get("SWW_TEST_BROWSER_CHANNEL") or None)
+        context = browser.new_context(viewport={"width": 1440, "height": 1000})
+
+        def route_local(route):
+            request = route.request
+            url = urlsplit(request.url)
+            if url.hostname != "127.0.0.1":
+                route.abort()
+                return
+            response = http.request(request.method, url.path, headers=request.all_headers(),
+                                    content=request.post_data_buffer)
+            headers = {key: value for key, value in response.headers.items()
+                       if key not in {"content-length", "content-encoding", "transfer-encoding"}}
+            route.fulfill(status=response.status_code, headers=headers, body=response.content)
+
+        context.route("**/*", route_local)
+        page = context.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto("http://127.0.0.1:8765/waterlooworks")
+
+        # Nothing is uploaded or ranked in this browser: it all comes back.
+        expect(page.locator("#resume-filename")).to_have_text("private.md")
+        expect(page.locator(".job-result")).to_have_count(1, timeout=15000)
+        expect(page.locator("#total-count")).to_have_text("1")
+        assert not errors
+        browser.close()

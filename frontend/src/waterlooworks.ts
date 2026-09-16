@@ -31,6 +31,8 @@ let polling = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let loadedAIRun = -1;
+/** A ranking that outlived a service restart is loaded once, not every poll. */
+let restoredRanking = false;
 
 const aiRunning = (): boolean => currentStatus?.ai.state === "running";
 
@@ -113,10 +115,22 @@ async function refreshStatus(): Promise<void> {
       try {
         const ranking: Ranking = normalizeRanking(await request("/ai/result"));
         loadedAIRun = number(currentStatus.ai.run_id);
+        restoredRanking = true;
         message("action-error", "");
         results.show(ranking);
       } catch (error) {
         message("action-error", error instanceof Error ? error.message : "AI 结果尚未就绪。");
+      }
+    }
+    // The service keeps the last ranking across restarts. Show it once, so a
+    // reload does not present an empty results pane next to a loaded resume.
+    if (!restoredRanking && currentStatus.ai.state !== "completed"
+        && object(currentStatus.ranking).available === true) {
+      restoredRanking = true;
+      try {
+        results.show(normalizeRanking(await request("/ranking")));
+      } catch {
+        // Nothing stored after all; the empty pane is already correct.
       }
     }
   } catch {
@@ -260,6 +274,7 @@ $("rank-button").addEventListener("click", () => void perform("rank-button", "�
       + `${number(started.shortlisted)} 个送入模型逐项核对，可在左侧查看进度或停止。`);
     return;
   }
+  restoredRanking = true;
   const ranking = normalizeRanking(await post("/rank", { limit: 100, preferences: preferences() }));
   $<HTMLInputElement>("result-search").value = "";
   results.show(ranking);

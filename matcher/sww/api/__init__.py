@@ -22,7 +22,7 @@ from ..jobs.crawler import WaterlooWorksCrawler, validation_message
 from ..llm import DeepSeekClient, DeepSeekError, Extractor, load_api_key, model_name
 from ..match import filters
 from ..match.pipeline import SemanticRanker, rank_local
-from ..resume import build_profile, extract_resume
+from ..resume import ResumeAnalysis, build_profile, extract_resume, refresh_recency
 from ..store import Store
 from .middleware import LocalOnlyMiddleware
 from .schemas import AIRankOptions, CrawlOptions, ImportJobs, Job, RankOptions
@@ -58,6 +58,14 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         "ai_task": None, "embedder": None, "reranker": None,
         "ai": {"state": "idle", "completed": 0, "total": 0, "message": "", "run_id": 0},
     }
+    # An upload and an evaluation survive a restart. Recency is recomputed on
+    # the way in: it is a distance from today, and it is a scored dimension,
+    # so a stored one would quietly mis-rank.
+    state["resume"] = store.recall("resume", lambda raw: refresh_recency(ResumeAnalysis.model_validate_json(raw)))
+    state["ranking"] = store.recall("ranking", json.loads)
+    if state["ranking"] and state["ranking"].get("engine") == "deepseek":
+        state["ai"] = {**state["ai"], "state": "completed",
+                       "message": "已载入上次完成的语义排名。", "complete": state["ranking"].get("complete", False)}
     browser = crawler if crawler is not None else WaterlooWorksCrawler(directory)
 
     def get_embedder():
@@ -111,6 +119,16 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         from ..match.assess import VERSION as MATCH_VERSION
         return Extractor(client, store, MATCH_VERSION)
 
+    async def remember_resume() -> None:
+        analysis = state["resume"]
+        await asyncio.to_thread(store.remember, "resume",
+                                analysis.model_dump_json() if analysis is not None else None)
+
+    async def remember_ranking() -> None:
+        ranking = state["ranking"]
+        await asyncio.to_thread(store.remember, "ranking",
+                                json.dumps(ranking, ensure_ascii=False) if ranking is not None else None)
+
     def resume_summary() -> Optional[dict]:
         analysis = state["resume"]
         if analysis is None:
@@ -142,6 +160,8 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
                 "source": state["source"], "collected_at": state["collected_at"],
                 "ai": state["ai"], "ai_config": ai_config(),
                 "browser": {"open": bool(getattr(browser, "is_open", False))},
+                "ranking": {"available": state["ranking"] is not None,
+                            "engine": (state["ranking"] or {}).get("engine", "")},
                 "embeddings": {"available": embedding_available(), "model": config.EMBEDDING_MODEL},
                 "rerank": {"available": rerank_available(), "model": config.RERANK_MODEL,
                            "pool": config.RERANK_POOL},
@@ -188,6 +208,8 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         analysis.warnings = list(dict.fromkeys(document.warnings + analysis.warnings))
         state["resume"], state["ranking"] = analysis, None
         state["ai"]["state"] = "idle"
+        await remember_resume()
+        await remember_ranking()
         return resume_summary()
 
     @app.get("/matcher-api/resume/profile")
@@ -342,6 +364,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         result.update(source=state["source"], collected_at=state["collected_at"], crawl=state["crawl"])
         state["ranking"] = result
         state["ai"]["state"] = "idle"
+        await remember_ranking()
         return result
 
     async def run_ai(options: AIRankOptions, client):
@@ -358,6 +381,9 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
                                        options.limit, options.shortlist, options.refine_pairs, progress)
             result.update(source=state["source"], collected_at=state["collected_at"], crawl=state["crawl"])
             state["ranking"] = result
+            # Store it before announcing the run finished: "completed" is what
+            # every watcher acts on, so nothing about it may still be pending.
+            await remember_ranking()
             state["ai"].update(state="completed", complete=result["complete"], usage=result["usage"],
                                message=f"语义排序完成：成功评估 {result['assessed_jobs']} 个职位。")
         except asyncio.CancelledError:
@@ -382,6 +408,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
             raise HTTPException(503, str(exc)) from None
         total = len(eligible) if options.shortlist <= 0 else min(len(eligible), options.shortlist)
         state["ranking"] = None
+        await remember_ranking()
         state["ai"] = {"state": "running", "stage": "criteria", "completed": 0, "total": total,
                        "message": "正在抽取岗位要求并逐条核对简历证据…",
                        "run_id": state["ai"]["run_id"] + 1}
@@ -402,6 +429,17 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         if (state["ai"]["state"] != "completed" or state["ranking"] is None
                 or state["ranking"].get("engine") != "deepseek"):
             raise HTTPException(409, "尚无已完成的 AI 排名。")
+        return state["ranking"]
+
+    @app.get("/matcher-api/ranking")
+    async def last_ranking():
+        """Whatever ranking is currently held, whichever engine produced it.
+
+        `/ai/result` answers about one live model run. This answers "what
+        should be on screen", which after a restart is what was stored.
+        """
+        if state["ranking"] is None:
+            raise HTTPException(409, "尚无排名结果。")
         return state["ranking"]
 
     @app.post("/matcher-api/cache/clear")

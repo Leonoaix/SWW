@@ -18,7 +18,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from . import config
 
@@ -354,6 +354,33 @@ class Store:
             self._db.execute("INSERT INTO meta (key, value) VALUES (?, ?)"
                              " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
             self._db.commit()
+
+    # ---- session state -----------------------------------------------------
+    #
+    # The resume and the ranking used to live only in the process, so every
+    # restart silently threw away an upload and an evaluation that had cost
+    # real model calls. They are session state rather than collected data,
+    # which is why they sit beside the jobs instead of in a table of their own.
+
+    def remember(self, key: str, payload: Optional[str]) -> None:
+        """Keep one JSON blob under `key`; None or "" forgets it."""
+        self.set_meta("state:" + key, payload or "")
+
+    def recall(self, key: str, load: Callable[[str], Any]) -> Any:
+        """Read one back, discarding anything `load` cannot make sense of.
+
+        A blob written by an earlier version of the schema must not stop the
+        service from starting; losing it is exactly as bad as not having
+        persisted it at all, which is where this started.
+        """
+        raw = self.get_meta("state:" + key) or ""
+        if not raw:
+            return None
+        try:
+            return load(raw)
+        except Exception:
+            self.remember(key, None)
+            return None
 
     # ---- async wrappers ----------------------------------------------------
 
