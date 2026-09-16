@@ -9,6 +9,7 @@ encrypted PDFs are refused even with an empty password.
 from __future__ import annotations
 
 import io
+import re
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -17,6 +18,34 @@ from pypdf import PdfReader
 from ..config import MAX_PDF_PAGES, MAX_RESUME_BYTES, MAX_RESUME_CHARACTERS
 from ..text import clean_unicode
 from .docx import extract_docx
+
+# Horizontal runs only: layout extraction pads columns apart with spaces.
+_PADDING = re.compile(r"[^\S\n]{2,}")
+
+
+def _page_text(page) -> str:
+    """Read one page by character position rather than by gap width.
+
+    pypdf's default extraction inserts a space wherever two glyphs sit far
+    enough apart, and kerning inside a word routinely is that far: real
+    resumes come out carrying "EDUCA TION", "INDUSTR Y EXPERIENCE", "F astAPI",
+    "V ue.js". That breaks section detection and skill matching at once, and
+    no single gap threshold separates kerning from spaces — widening it far
+    enough to fix those starts welding real words together instead.
+
+    Layout mode places characters by coordinate, so it has no threshold to get
+    wrong. It needs a content stream that the default mode tolerates missing,
+    which is why the fallback is per page rather than per document.
+    """
+    try:
+        text = page.extract_text(extraction_mode="layout") or ""
+    except Exception:
+        text = ""
+    if not text.strip():
+        text = page.extract_text() or ""
+    # Collapse the column padding so a phrase is one space wide however it was
+    # justified; line structure is what section detection reads, and it stays.
+    return _PADDING.sub(" ", text)
 
 
 @dataclass
@@ -68,7 +97,7 @@ def extract_resume(data: bytes, filename: str = "") -> Document:
         character_count = 0
         blank_pages = 0
         for page in reader.pages:
-            page_text = clean_unicode(page.extract_text() or "").strip()
+            page_text = clean_unicode(_page_text(page)).strip()
             if not page_text:
                 blank_pages += 1
             character_count += len(page_text)

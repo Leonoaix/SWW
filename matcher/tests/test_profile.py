@@ -111,3 +111,59 @@ async def test_a_stored_analysis_is_dated_from_today_not_from_when_it_was_writte
     months = [item.months_ago for item in a_year_later.profile.experiences]
     assert months == sorted(months)
     assert all(item.recency < 1.0 for item in a_year_later.profile.experiences)
+
+
+@pytest.mark.parametrize("headline,title,organization", [
+    # "Employer, Location — Role": splitting on the first comma read this
+    # backwards and filed the employer as the job title.
+    ("Noah Lab, Waterloo, ON — Research Assistant Sep 2025 – Apr 2026",
+     "Research Assistant", "Noah Lab, Waterloo, ON"),
+    ("Acme Telecom, Chengdu, China — Engineering Intern (Co-op) May 2024 – Aug 2024",
+     "Engineering Intern (Co-op)", "Acme Telecom, Chengdu, China"),
+    # "Role, Employer" keeps working: the side naming a job decides, not the order.
+    ("Backend Intern, Acme Corp May 2024 – Aug 2024", "Backend Intern", "Acme Corp"),
+    ("Software Engineer — Acme Corp", "Software Engineer", "Acme Corp"),
+    # Neither side names a role: nothing is invented, nothing is swapped.
+    ("Telemetry Normalizer Oct 2025 – Dec 2025", "Telemetry Normalizer", ""),
+    ("Research Assistant, University of Waterloo 09/2024 - 12/2024",
+     "Research Assistant", "University of Waterloo"),
+])
+def test_an_entry_headline_is_split_by_which_side_names_a_job(headline, title, organization):
+    from sww.resume.profile import _split_entry
+
+    assert _split_entry(headline) == (title, organization)
+
+
+def test_dates_are_stripped_from_an_entry_headline():
+    """Every backslash in this pattern was doubled, so its character classes
+    were read as literal backslashes and it matched nothing at all. Dates rode
+    into the employer field on every resume."""
+    from sww.resume.profile import _DATE_IN_LINE
+
+    for headline in ("Acme Corp May 2024 – Aug 2024", "Acme Corp 09/2024 - 12/2024",
+                     "Acme Corp Sep 2025 – Present"):
+        assert _DATE_IN_LINE.sub("", headline).strip(" ,|-–—") == "Acme Corp"
+
+
+async def test_an_undated_entry_comes_back_as_null_and_is_read_as_unstated(store):
+    """The prompt tells the model to use null for anything the resume does not
+    state, and it applies that to text fields too: an undated project returns
+    `"start": null`. Declaring those `str` made the commonest resume shape a
+    schema failure, and the whole extraction fell back to the local split."""
+    blocks = segment(RESUME)
+    experience = next(block for block in blocks if block.kind == "experience")
+    client = FakeClient()
+    client.responses["match"] = {
+        "headline": None, "domains": None, "education": [], "availability": None,
+        "experiences": [{"block_id": experience.id, "anchor": "Software Engineering Intern",
+                         "kind": "project", "title": "Telemetry Normalizer",
+                         "organization": None, "start": None, "end": None, "months": None,
+                         "summary": "规范化遥测数据", "highlights": None, "technologies": None}]}
+    analysis = await build_profile(RESUME, Extractor(client, store, "test"))
+    assert analysis.profile.source == "model"
+    item = analysis.profile.experiences[0]
+    assert (item.start, item.end, item.organization) == ("", "", "")
+    assert (item.technologies, item.highlights) == ([], [])
+    assert analysis.profile.headline == "" and analysis.profile.domains == []
+    # A null availability is not an empty one: the resume's own statement fills it.
+    assert analysis.profile.availability.months == [4]

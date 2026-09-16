@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .. import config
 from ..config import MAX_RESUME_API_CHARACTERS
@@ -64,8 +64,27 @@ JSON shape:
 """
 
 
-class EducationItem(BaseModel):
+class Extracted(BaseModel):
+    """A model-filled shape where an explicit null means "not stated".
+
+    The prompt tells the model to use null for anything the resume does not
+    state, and it applies that to text as well as numbers — an undated project
+    comes back with `"start": null`. Declaring those fields `str` turned the
+    single commonest resume shape into a schema failure, which fell back to the
+    local split without the user ever learning why.
+    """
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _null_is_unstated(cls, value, info):
+        if value is not None:
+            return value
+        field = cls.model_fields.get(info.field_name)
+        return field.get_default(call_default_factory=True) if field is not None else value
+
+
+class EducationItem(Extracted):
     institution: str = Field(default="", max_length=300)
     program: str = Field(default="", max_length=300)
     level: str = Field(default="", max_length=60)
@@ -73,8 +92,7 @@ class EducationItem(BaseModel):
     coursework: list[str] = Field(default_factory=list, max_length=40)
 
 
-class ExperienceItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ExperienceItem(Extracted):
     block_id: str = Field(default="", max_length=20)
     anchor: str = Field(default="", max_length=800)
     kind: Literal["work", "project", "research", "leadership", "other"] = "other"
@@ -111,16 +129,14 @@ class ExperienceItem(BaseModel):
         return round(config.RECENCY_FLOOR + (1 - config.RECENCY_FLOOR) * decay, 4)
 
 
-class Availability(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class Availability(Extracted):
     terms: list[str] = Field(default_factory=list, max_length=12)
     months: list[int] = Field(default_factory=list, max_length=6)
     note: str = Field(default="", max_length=300)
 
 
-class ProfileDraft(BaseModel):
+class ProfileDraft(Extracted):
     """Exactly what the model is allowed to return."""
-    model_config = ConfigDict(extra="forbid")
     headline: str = Field(default="", max_length=400)
     domains: list[str] = Field(default_factory=list, max_length=12)
     education: list[EducationItem] = Field(default_factory=list, max_length=10)
@@ -260,9 +276,40 @@ def _skill_claims(text: str, blocks: list[Block], extra: list[str]) -> list[Skil
 
 _AVAILABILITY = re.compile(
     r"(?:available|availability|seeking|looking for)[^.\n]{0,80}?(\d{1,2})\s*[- ]?\s*month", re.I)
+# Every backslash here was doubled, so the class escapes were read as literal
+# backslashes and the pattern could not match anything: entry headlines kept
+# their dates, which then landed in the employer field.
 _DATE_IN_LINE = re.compile(
-    r"(?<!\\w)(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s*,?\\s*\\d{4}"
-    r"|(?<!\\w)\\d{1,2}[/-]\\d{4}|(?<!\\w)(?:present|current)\\b|[-\\u2013\\u2014]\\s*(?=\\s*$)", re.I)
+    r"(?<!\w)(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*,?\s*\d{4}"
+    r"|(?<!\w)\d{1,2}[/-]\d{4}|(?<!\w)(?:present|current)\b|[-\u2013\u2014]\s*(?=\s*$)", re.I)
+
+# Words that name a job rather than an employer. Used to tell which side of an
+# entry headline is which, because resumes write it both ways round.
+_ROLE_WORDS = re.compile(
+    r"\b(?:intern(?:ship)?s?|co-?op|engineer|developer|programmer|analyst|scientist|researcher"
+    r"|assistant|associate|manager|director|lead|consultant|designer|architect|administrator"
+    r"|specialist|technician|officer|founder|instructor|tutor|fellow|trainee|volunteer"
+    r"|工程师|实习生?|助理|研究员|开发)\b", re.I)
+
+
+def _split_entry(headline: str) -> tuple[str, str]:
+    """Separate the role from the employer in an entry's first line.
+
+    Resumes write this both ways round — "Role, Employer" and the equally
+    common "Employer, Location — Role" — so the side naming a job is found by
+    what it says rather than by where it sits. Splitting on the first comma
+    alone read the second form backwards, filing the employer as the job
+    title. When neither side names a role the leading part stays the title and
+    nothing is invented.
+    """
+    text = re.sub(r"\s{2,}\S.*$", "", _DATE_IN_LINE.sub("", headline)).strip(" ,|-\u2013\u2014")
+    separator = re.search(r"\s[\u2014\u2013]\s|\s-\s", text)
+    head, tail = ((text[:separator.start()], text[separator.end():]) if separator
+                  else text.partition(",")[::2])
+    head, tail = head.strip(" ,|"), tail.strip(" ,|")
+    if tail and _ROLE_WORDS.search(tail) and not _ROLE_WORDS.search(head):
+        head, tail = tail, head
+    return collapse(head)[:300], collapse(tail)[:300]
 _TERM = re.compile(r"\b(20\d{2})\s*[-–]?\s*(winter|spring|summer|fall|autumn)\b|\b(winter|spring|summer|fall|autumn)\s+(20\d{2})\b", re.I)
 
 
@@ -293,9 +340,7 @@ def heuristic_profile(text: str, blocks: list[Block], now=None) -> CandidateProf
         title = organization = ""
         looks_like_heading = len(headline) <= 120 and len(lines) > 1
         if looks_like_heading:
-            stripped = re.sub(r"\s{2,}\S.*$", "", _DATE_IN_LINE.sub("", headline)).strip(" ,|-\u2013")
-            head, _, tail = stripped.partition(",")
-            title, organization = collapse(head)[:300], collapse(tail)[:300]
+            title, organization = _split_entry(headline)
         body = lines if not looks_like_heading else lines[1:]
         experiences.append(ExperienceItem(
             block_id=block.id,

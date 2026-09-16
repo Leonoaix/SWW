@@ -88,3 +88,34 @@ def test_skill_aliases_and_symbol_languages():
 
 def test_ligatures_are_normalized():
     assert "Flask" in extract_skills("ﬂask")
+
+
+def test_a_page_layout_extraction_cannot_read_falls_back_on_its_own():
+    """PDF text is rebuilt from character positions rather than from gap
+    widths, because kerning inside a word is as wide as a space and produced
+    "EDUCA TION" and "F astAPI" out of real resumes. Position mode needs a
+    content stream that the default tolerates missing, so a page it cannot read
+    must not take the rest of the document down with it."""
+    from pypdf import PdfReader
+    from sww.resume.documents import _page_text
+
+    data = pdf_bytes("Python, SQL, React. Software developer.", pages=2)
+    pages = PdfReader(BytesIO(data), strict=False).pages
+    with pytest.raises(Exception):
+        pages[1].extract_text(extraction_mode="layout")
+
+    assert "Python" in _page_text(pages[0])
+    assert _page_text(pages[1]).strip() == ""
+    result = extract_resume(data, "two-pages.pdf")
+    assert "Python" in result.text
+
+
+def test_column_padding_is_collapsed_but_line_structure_is_kept():
+    """Position mode pads columns apart with spaces. Skill aliases match
+    literally, so a phrase has to be one space wide; section detection reads
+    line structure, so the lines have to survive."""
+    from sww.resume.documents import _PADDING
+
+    padded = "EDUCATION\nUniversity of Waterloo       Waterloo, ON\n•  Built  a  service\n"
+    assert _PADDING.sub(" ", padded) == (
+        "EDUCATION\nUniversity of Waterloo Waterloo, ON\n• Built a service\n")

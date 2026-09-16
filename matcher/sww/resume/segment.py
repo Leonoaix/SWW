@@ -28,7 +28,7 @@ EVIDENCE_KINDS: frozenset[str] = frozenset({"experience", "project", "publicatio
 
 _SECTION_PATTERNS: tuple[tuple[str, str], ...] = (
     ("education", r"education|academic(?:\s+background)?|schooling|教育(?:背景|经历)?|学历"),
-    ("experience", r"(?:work|professional|employment|industry|relevant|related)?\s*experience"
+    ("experience", r"(?:[a-z][a-z&/+-]*(?:\s+[a-z][a-z&/+-]*)?\s+)?experiences?"
                    r"|employment(?:\s+history)?|internships?|co-?op(?:\s+experience)?|positions?\s+held"
                    r"|工作(?:经历|经验)|实习(?:经历|经验)?"),
     ("project", r"(?:technical|personal|academic|selected|side|key)?\s*projects?|portfolio|项目(?:经历|经验)?"),
@@ -191,19 +191,32 @@ def _entries(lines: list[tuple[int, str]], kind: BlockKind) -> Iterator[list[tup
     """Split a section's lines into one group per role/project.
 
     A new entry starts at a non-bullet line carrying a date range, which is how
-    essentially every resume separates positions. Sections without dates stay a
-    single entry rather than being guessed apart.
+    essentially every resume separates positions.
+
+    Projects and publications routinely carry no dates at all, and those used
+    to collapse into one entry holding a whole section. So once an entry's
+    bullets have begun, a return to an unindented headline-shaped line is read
+    as the next entry. Wrapped bullet text is what that risks mistaking, and it
+    is excluded twice over: continuation lines keep their indent, and the ones
+    that do not are prose, which starts lower-case where a headline does not.
     """
     if kind not in {"experience", "project", "publication", "activity", "education"}:
         yield lines
         return
     current: list[tuple[int, str]] = []
+    bulleted = False
     for offset, line in lines:
-        starts_entry = bool(_DATE_RANGE.search(line)) and not _BULLET.match(line)
-        if starts_entry and current and any(text.strip() for _, text in current):
+        bullet = bool(_BULLET.match(line))
+        stripped = line.strip()
+        dated = bool(_DATE_RANGE.search(line)) and not bullet
+        resumed = (bulleted and not bullet and not line[:1].isspace()
+                   and len(stripped) <= 120
+                   and stripped[:1].isalnum() and not stripped[:1].islower())
+        if (dated or resumed) and current and any(text.strip() for _, text in current):
             yield current
-            current = []
+            current, bulleted = [], False
         current.append((offset, line))
+        bulleted = bulleted or bullet
     if current:
         yield current
 
@@ -225,6 +238,13 @@ def prepare(text: str) -> tuple[str, list[Block]]:
         lines.append((offset, line.rstrip("\r\n")))
         offset += len(line)
 
+    # Inline labels are how a run-on extraction expresses its sections. A
+    # document with headings of its own does not need them, and reading them
+    # there is actively wrong: "Research:" inside a technical-skills list is a
+    # sub-label, and treating it as a heading filed the whole skills section as
+    # research experience — turning a list of claims into demonstrated work.
+    explicit_headings = any(_heading_kind(line) is not None for _, line in lines)
+
     sections: list[tuple[BlockKind, str, list[tuple[int, str]]]] = []
     # Everything before the first recognised heading is the contact header.
     current_kind: BlockKind = "header"
@@ -236,7 +256,7 @@ def prepare(text: str) -> tuple[str, list[Block]]:
             sections.append((current_kind, current_heading, current))
             current_kind, current_heading, current = kind, line.strip().rstrip(":："), []
             continue
-        inline = _split_inline_label(line)
+        inline = None if explicit_headings else _split_inline_label(line)
         if inline is not None:
             kind, heading, remainder = inline
             sections.append((current_kind, current_heading, current))
