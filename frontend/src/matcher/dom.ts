@@ -35,6 +35,17 @@ export function chips(items: string[], missing = false): HTMLElement {
   return container;
 }
 
+/** Whether a URL actually addresses a posting, or only stands in for one.
+ *
+ * Most board rows open their posting through an onclick handler and have no
+ * href, so the crawler records `jobs.htm#job-<id>`. That is a perfectly valid
+ * WaterlooWorks URL and passes every other check — it just lands on the board.
+ * Presenting it as an apply link is how the button came to take people to the
+ * wrong page.
+ */
+export const isPlaceholderUrl = (value: string): boolean =>
+  /\/myAccount\/co-op\/full\/jobs\.htm#job-/.test(value);
+
 /** Only an https WaterlooWorks posting URL may become a link. */
 export function safeJobUrl(value: string): string | null {
   try {

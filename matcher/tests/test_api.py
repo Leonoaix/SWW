@@ -331,3 +331,29 @@ def test_apply_never_submits_an_application(tmp_path):
     # The only interaction is a navigation to the read-only posting URL.
     assert all(url.startswith("https://waterlooworks.uwaterloo.ca/") for url in crawler.opened)
     assert not hasattr(crawler, "submitted")
+
+
+def test_a_posting_with_no_address_opens_the_board_and_says_what_to_search(tmp_path):
+    """The bug this guards: `jobs.htm#job-123` is a valid WaterlooWorks URL
+    that lands on the board, so presenting it as an apply link sent people to
+    the wrong page."""
+    from sww.jobs.parser import JOBS_URL, placeholder_url
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        app.state.store.replace_jobs([{**job("123"), "url": placeholder_url("123")}])
+        body = client.post("/matcher-api/jobs/123/open").json()
+        assert body["needs_search"] is True
+        assert "123" in body["message"]
+        assert crawler.opened == [JOBS_URL]        # the board, not a fake posting
+
+
+def test_a_posting_with_a_real_address_opens_that_address(tmp_path):
+    crawler = OpenableCrawler()
+    app = app_with_browser(tmp_path, crawler)
+    real = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm?action=display&jobId=654321"
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        app.state.store.replace_jobs([{**job("654321"), "url": real}])
+        body = client.post("/matcher-api/jobs/654321/open").json()
+        assert body["needs_search"] is False
+        assert crawler.opened == [real]

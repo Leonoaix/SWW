@@ -19,6 +19,7 @@ from .. import config
 from ..embedding import available as embedding_available, load_embedder
 from ..rerank import available as rerank_available, load_reranker
 from ..jobs.crawler import WaterlooWorksCrawler, validation_message
+from ..jobs.parser import JOBS_URL, is_placeholder
 from ..llm import DeepSeekClient, DeepSeekError, Extractor, load_api_key, model_name
 from ..match import filters
 from ..match.pipeline import SemanticRanker, rank_local
@@ -226,15 +227,25 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
             raise HTTPException(404, "本机没有这个职位，请重新采集。")
         if not getattr(browser, "is_open", False):
             raise HTTPException(409, "登录浏览器未打开。请先点「打开登录浏览器」。")
+        url = job.get("url") or ""
+        # A posting that only opens from a modal has no address of its own, so
+        # the most that can be done is put the board in front of the user with
+        # the id to search for. Saying that beats opening the board and calling
+        # it the posting, which is what the apply button used to do.
+        searchable = is_placeholder(url)
         async with state["browser_lock"]:
             try:
-                destination = await browser.open_posting(job.get("url") or "")
+                destination = await browser.open_posting(JOBS_URL if searchable else url)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from None
             except Exception as exc:
-                raise HTTPException(503, "无法在登录浏览器中打开该职位。") from exc
-        return {"url": destination, "job_id": job_id,
-                "message": "已在登录浏览器中打开。本工具不会替你提交申请。"}
+                raise HTTPException(503, "无法在登录浏览器中打开。") from exc
+        return {
+            "url": destination, "job_id": job_id, "needs_search": searchable,
+            "message": (f"该职位没有独立网址，已打开职位看板，请搜索编号 {job_id}。" if searchable
+                        else "已在登录浏览器中打开该职位。")
+                       + "本工具不会替你提交申请。",
+        }
 
     async def run_crawl(options: CrawlOptions):
         async def progress(update):

@@ -495,6 +495,14 @@ class WaterlooWorksCrawler:
                 html = await self._content(detail_page or self._page)
                 detail = parse_detail(html, job_id)
                 if detail:
+                    # When the posting opened at an address of its own — a
+                    # popup, a new tab, or a same-tab navigation — that address
+                    # is a real deep link, observed rather than guessed. Most
+                    # postings open in a modal and have none, which is why the
+                    # listing falls back to a board URL with a fragment.
+                    source = (detail_page or self._page).url
+                    if source != before_url and safe_job_url(source):
+                        detail = {**detail, "url": safe_job_url(source)}
                     return detail
                 await self._settle(wait)
             return None

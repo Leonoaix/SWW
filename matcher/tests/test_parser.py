@@ -170,3 +170,31 @@ def test_login_expiry_and_sso_are_detected_without_credentials():
     assert login_required("WaterlooWorks - Not Logged In", "https://waterlooworks.uwaterloo.ca/notLoggedIn.htm")
     assert login_required("", "https://waterlooworks.uwaterloo.ca/notLoggedIn.htm")
     assert not login_required("Job qualifications: login systems experience", JOBS_URL)
+
+
+def test_a_row_without_an_href_is_marked_as_having_no_address():
+    """Board titles open through an onclick handler, so most postings have no
+    URL. The stand-in must be recognisable as one."""
+    from sww.jobs.parser import is_placeholder, placeholder_url
+    html = ('<table><thead><tr><th></th><th>Job Title</th></tr></thead><tbody>'
+            '<tr><td><input name="dataViewerSelection" value="123456"></td>'
+            '<td><a class="overflow--ellipsis" href="#" '
+            'onclick="getPostingOverview(\'123456\'); return false">Engineer</a></td>'
+            '</tr></tbody></table>')
+    job = parse_listing(html).jobs[0]
+    assert job["url"] == placeholder_url("123456")
+    assert is_placeholder(job["url"])
+    # It is otherwise a perfectly valid WaterlooWorks URL, which is the trap.
+    assert safe_job_url(job["url"]) is not None
+
+
+def test_a_row_with_a_real_href_keeps_it():
+    from sww.jobs.parser import is_placeholder
+    html = ('<table><thead><tr><th></th><th>Job Title</th></tr></thead><tbody>'
+            '<tr><td><input name="dataViewerSelection" value="654321"></td>'
+            '<td><a class="overflow--ellipsis" '
+            'href="/myAccount/co-op/full/jobs.htm?action=display&jobId=654321">Engineer</a>'
+            '</td></tr></tbody></table>')
+    job = parse_listing(html).jobs[0]
+    assert not is_placeholder(job["url"])
+    assert "jobId=654321" in job["url"]

@@ -59,6 +59,23 @@ def field_for(value: str) -> Optional[str]:
     return next((name for name, aliases in FIELD_LABELS.items() if key in aliases), None)
 
 
+def placeholder_url(job_id: str) -> str:
+    """Stand-in for a posting that has no address of its own.
+
+    Most board rows open their posting through an onclick handler, so there is
+    no href to link to. This records which posting a row referred to without
+    pretending to be a link to it — `is_placeholder` is how every consumer
+    tells the difference, because the string is otherwise a perfectly valid
+    WaterlooWorks URL and will silently land on the board.
+    """
+    return JOBS_URL + "#job-" + job_id
+
+
+def is_placeholder(url: str) -> bool:
+    """Whether this is a stand-in rather than a link to an actual posting."""
+    return bool(url) and url.startswith(JOBS_URL + "#job-")
+
+
 def safe_job_url(href: str, base: str = JOBS_URL) -> Optional[str]:
     """Allow only HTTPS read-only board/posting URLs, dropping fragments.
 
@@ -308,7 +325,7 @@ def parse_listing(html: str, base: str = JOBS_URL) -> Listing:
             result.warnings.append(f"Job {job_id}: no recognized read-only detail link.")
         job = {name: "" for name in FIELD_LABELS}
         job.update(fields)
-        job.update(id=job_id, title=title, url=(target.url if target and target.url else JOBS_URL + "#job-" + job_id), metadata=metadata)
+        job.update(id=job_id, title=title, url=(target.url if target and target.url else placeholder_url(job_id)), metadata=metadata)
         result.jobs.append(job)
 
     # A stale/hidden empty notice must never override real rows.
