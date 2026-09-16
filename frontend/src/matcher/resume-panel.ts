@@ -53,6 +53,12 @@ export function renderResume(resume: Resume | null, hasResume: boolean): void {
     ? resume.skills.map(skill => element("span", "skill-chip", skill))
     : [element("span", "small-label", "没有技能被任何经历佐证。")]));
 
+  // Listed by the resume and placed in one specific job. Weaker than the work
+  // naming the tool outright, stronger than a skills table on its own.
+  $("resume-attributed-skills").replaceChildren(...(resume.attributed_skills.length
+    ? resume.attributed_skills.map(skill => element("span", "skill-chip partial", skill))
+    : [element("span", "small-label", "无。")]));
+
   $("resume-listed-skills").replaceChildren(...(resume.listed_only_skills.length
     ? resume.listed_only_skills.map(skill => element("span", "skill-chip missing", skill))
     : [element("span", "small-label", "无。")]));

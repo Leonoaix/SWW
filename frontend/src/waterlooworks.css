@@ -66,6 +66,9 @@
 .small-label { font-size: 10px; color: var(--ink-muted); }
 .skill-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .skill-chip { font-size: 10px; background: var(--accent-tint); color: var(--accent); padding: 3px 7px; border-radius: 3px; }
+/* Between the two: the accent says same family as demonstrated, the sunken
+   ground says weaker claim. No new hue for a third tier. */
+.skill-chip.partial { background: var(--surface-sunken); color: var(--accent); }
 .skill-chip.missing { background: var(--surface-sunken); color: var(--ink-muted); }
 .warning-list { margin: 10px 0 0; padding-left: 16px; color: var(--warn); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
 .results-panel { padding-top: 30px; min-width: 0; }

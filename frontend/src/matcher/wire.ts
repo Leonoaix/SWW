@@ -31,7 +31,7 @@ export interface Experience {
 
 export interface Resume {
   filename: string; headline: string; source: string;
-  skills: string[]; listed_only_skills: string[]; warnings: string[];
+  skills: string[]; attributed_skills: string[]; listed_only_skills: string[]; warnings: string[];
   experiences: Experience[]; total_experience_months: number;
   availability: { months: number[]; terms: string[] };
 }
@@ -74,7 +74,8 @@ export function normalizeResume(value: unknown): Resume {
   const availability = object(data.availability);
   return {
     filename: string(data.filename), headline: string(data.headline), source: string(data.source),
-    skills: strings(data.skills), listed_only_skills: strings(data.listed_only_skills),
+    skills: strings(data.skills), attributed_skills: strings(data.attributed_skills),
+    listed_only_skills: strings(data.listed_only_skills),
     warnings: strings(data.warnings),
     experiences: Array.isArray(data.experiences) ? data.experiences.map(item => {
       const entry = object(item);

@@ -166,12 +166,15 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
     vocabulary simply drops that component instead of scoring zero overall.
     """
     demonstrated = {name.casefold() for name in profile.demonstrated_skills}
+    attributed = {name.casefold() for name in profile.attributed_skills}
     listed = {name.casefold() for name in profile.listed_skills}
-    matched, partial, missing = [], [], []
+    matched, applied, partial, missing = [], [], [], []
     for skill in posting_skills:
         key = skill.casefold()
         if key in demonstrated:
             matched.append(skill)
+        elif key in attributed:
+            applied.append(skill)
         elif key in listed:
             partial.append(skill)
         else:
@@ -185,9 +188,13 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
         components["recency"] = (float(config.RECENCY_POINTS_LOCAL),
                                  max(0.0, min(1.0, recency)) * max(0.0, min(1.0, relevance)))
     if posting_skills:
-        # A listed-but-never-used skill is half credit: it is a real claim and
-        # a weaker one, which is exactly what the distinction is worth.
-        components["skill_overlap"] = (25.0, (len(matched) + 0.5 * len(partial)) / len(posting_skills))
+        # Three tiers, because there are three things to say. Named inside the
+        # work is full credit. Listed and placed by the model in one specific
+        # job is most of it. A name in a skills table and nothing else is half:
+        # a real claim, and a weaker one.
+        covered = (len(matched) + config.ATTRIBUTED_SKILL_CREDIT * len(applied)
+                   + config.LISTED_SKILL_CREDIT * len(partial))
+        components["skill_overlap"] = (25.0, covered / len(posting_skills))
     preference_fraction = _preference_fraction(job, preferences)
     if preference_fraction is not None:
         components["preferences"] = (10.0, preference_fraction)
@@ -202,8 +209,9 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
     if recency is not None:
         reasons.append("与之匹配的经历新近度 %.0f%%（越近的经历权重越高，两年半衰）。" % (100 * recency))
     if posting_skills:
-        reasons.append("岗位提到的 %d 项词表技能中，简历实践过 %d 项%s。" % (
+        reasons.append("岗位提到的 %d 项词表技能中，简历实践过 %d 项%s%s。" % (
             len(posting_skills), len(matched),
+            ("，归于具体经历 %d 项" % len(applied)) if applied else "",
             ("，仅列在技能清单 %d 项" % len(partial)) if partial else ""))
     warnings = list(job.get("warnings", []))
     if not posting_skills:
@@ -217,7 +225,7 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
         **job,
         "score": score, "score_breakdown": breakdown,
         "matched_skills": matched, "missing_skills": missing,
-        "listed_only_skills": partial, "reasons": reasons,
+        "attributed_skills": applied, "listed_only_skills": partial, "reasons": reasons,
         "warnings": unique(warnings), "criteria": [], "eligibility": "needs_review",
         "ai_status": "local", "evidence_coverage": None, "must_have_coverage": None,
         "must_have_count": None, "retrieval_score": round(relevance, 4),

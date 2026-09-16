@@ -43,6 +43,11 @@ BM25_B = 0.75
 # A skills-list mention is a claim; a project bullet is evidence. Retrieval
 # keeps both but stops a keyword list from outweighing demonstrated work.
 LISTED_SKILL_WEIGHT = 0.3
+# How much of a demonstrated skill each weaker tier is worth in skill overlap.
+# A name in a skills table and nothing else is half. Listing it *and* placing
+# it in one specific job lands on the midpoint between those two.
+ATTRIBUTED_SKILL_CREDIT = 0.75
+LISTED_SKILL_CREDIT = 0.5
 EMBEDDING_MODEL = os.environ.get("SWW_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 EMBEDDING_CACHE_DIR = DATA_DIR / "embeddings"
 # Requirement-level late interaction: how many resume chunks a single job

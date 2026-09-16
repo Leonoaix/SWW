@@ -25,7 +25,7 @@ alone, so the local ranker never depends on the network.
 from __future__ import annotations
 
 import re
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -145,9 +145,19 @@ class ProfileDraft(Extracted):
 
 
 class SkillClaim(BaseModel):
+    """Where a skill is written, which is what decides how much it is worth.
+
+    Three tiers, not two. "demonstrated" is the skill named inside a piece of
+    work. "listed" is a name in a skills table and nothing more. Between them
+    sits the skill a resume lists *and* the model ties to one specific
+    experience: a backend co-op whose bullets say "shipped an async ingestion
+    service" without ever writing "Python". Filing that with the bare list
+    entries discounted the candidate's core stack on the common resume that
+    describes outcomes instead of tools.
+    """
     model_config = ConfigDict(extra="forbid")
     name: str
-    evidence: Literal["demonstrated", "listed"]
+    evidence: Literal["demonstrated", "attributed", "listed"]
     block_ids: list[str] = Field(default_factory=list)
 
 
@@ -170,6 +180,11 @@ class CandidateProfile(BaseModel):
         return [claim.name for claim in self.skills if claim.evidence == "demonstrated"]
 
     @property
+    def attributed_skills(self) -> list[str]:
+        """Listed by the resume and tied by the model to one experience."""
+        return [claim.name for claim in self.skills if claim.evidence == "attributed"]
+
+    @property
     def listed_skills(self) -> list[str]:
         return [claim.name for claim in self.skills if claim.evidence == "listed"]
 
@@ -182,6 +197,7 @@ class CandidateProfile(BaseModel):
             "experiences": [item.model_dump(exclude={"anchor"}, exclude_defaults=True)
                             for item in self.experiences],
             "demonstrated_skills": self.demonstrated_skills,
+            "attributed_skills": self.attributed_skills,
             "listed_only_skills": self.listed_skills,
             "availability": self.availability.model_dump(exclude_defaults=True),
             "total_experience_months": self.total_experience_months,
@@ -243,12 +259,16 @@ def _months_ago(block: Optional[Block], now=None) -> Optional[int]:
     return months_since(block.ended, now) if block.ended else None
 
 
-def _skill_claims(text: str, blocks: list[Block], extra: list[str]) -> list[SkillClaim]:
+def _skill_claims(text: str, blocks: list[Block],
+                  attributed: Sequence[tuple[str, str]]) -> list[SkillClaim]:
     """Classify every skill by where it is actually written.
 
-    `extra` holds technologies the model attributed to an experience; they are
-    only accepted as demonstrated if they really occur inside an evidence
-    block, so a hallucinated tool cannot become a demonstrated skill.
+    `attributed` holds (block_id, technology) pairs the model tied to one
+    experience. A pair only reaches "demonstrated" when the name really occurs
+    inside that evidence block, so an invented tool still cannot claim to have
+    been used. What it can do is lift a skill out of the bare list: the resume
+    names it and the model placed it in a specific job, which is worth more
+    than a skills table alone and less than the work naming it outright.
     """
     claims: dict[str, SkillClaim] = {}
     for mention in find_mentions(text, blocks):
@@ -264,13 +284,27 @@ def _skill_claims(text: str, blocks: list[Block], extra: list[str]) -> list[Skil
         if mention.block_id and mention.block_id not in claim.block_ids:
             claim.block_ids.append(mention.block_id)
     evidence = {block.id: block for block in blocks if block.is_evidence}
-    for name in extra:
-        name = collapse(name)
-        if not name or name in claims:
+    for block_id, raw in attributed:
+        block = evidence.get(block_id)
+        name = collapse(raw)
+        if block is None or not name:
             continue
-        owners = [block.id for block in evidence.values() if name.casefold() in block.text.casefold()]
-        if owners:
-            claims[name] = SkillClaim(name=name, evidence="demonstrated", block_ids=owners)
+        # Canonicalise first: the model writes "Vue.js" where the alias table
+        # says "Vue", and two spellings of one skill must not become two claims
+        # sitting in different tiers.
+        for canonical in extract_skills(name) or [name]:
+            claim = claims.get(canonical)
+            if claim is None:
+                # Written nowhere in the resume. Accept it only where the block
+                # itself says so, which is the old rule for an unknown tool.
+                if name.casefold() in block.text.casefold():
+                    claims[canonical] = SkillClaim(name=canonical, evidence="demonstrated",
+                                                   block_ids=[block_id])
+                continue
+            if claim.evidence == "listed":
+                claim.evidence = "attributed"
+            if claim.evidence != "demonstrated" and block_id not in claim.block_ids:
+                claim.block_ids.append(block_id)
     return sorted(claims.values(), key=lambda claim: claim.name.casefold())
 
 
@@ -415,7 +449,7 @@ async def build_profile(text: str, extractor: Optional[Extractor] = None,
         months = block.months if block is not None and block.months is not None else item.months
         experiences.append(item.model_copy(
             update={"months": months, "months_ago": _months_ago(block, now)}))
-    technologies = [name for item in experiences for name in item.technologies]
+    technologies = [(item.block_id, name) for item in experiences for name in item.technologies]
     experiences = _most_recent_first(experiences)
     profile = CandidateProfile(
         headline=draft.headline, domains=draft.domains[:12], education=draft.education,
@@ -467,6 +501,7 @@ def prompt_payload(analysis: "ResumeAnalysis") -> dict:
         "education": [item.model_dump(exclude_defaults=True) for item in profile.education],
         "availability": profile.availability.model_dump(exclude_defaults=True),
         "demonstrated_skills": profile.demonstrated_skills,
+        "attributed_skills": profile.attributed_skills,
         "listed_only_skills": profile.listed_skills,
         "total_experience_months": profile.total_experience_months,
         "work_experience_months": profile.work_experience_months,

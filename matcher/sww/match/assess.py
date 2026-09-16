@@ -36,8 +36,10 @@ Experiences are ordered most recent first and carry months_ago. Recency is NOT a
 reason to judge a requirement missing: work done years ago still demonstrably happened,
 and how current it is is scored separately in code. Judge only whether the evidence exists.
 You are given: candidate.experiences (each with a `ref` and verbatim `text`), the
-candidate's demonstrated_skills (used in real work) and listed_only_skills (named in a
-skills list but never used in any described work), and a numbered requirements list.
+candidate's demonstrated_skills (named inside a described piece of work),
+attributed_skills (listed by the resume and tied to one specific experience, whose text
+describes the outcome without naming the tool) and listed_only_skills (named in a skills
+list and nowhere else), and a numbered requirements list.
 Judge EVERY requirement exactly once, by its index. Never omit one.
 status:
   direct       = an experience demonstrably did this.
@@ -47,7 +49,9 @@ status:
   conflict     = the resume explicitly states something incompatible with a MANDATORY
                  eligibility requirement. Absence of information is NEVER a conflict.
 A skill appearing only in listed_only_skills is NOT evidence of experience: judge such a
-requirement missing or transferable, never direct. Familiarity with a product does not
+requirement missing or transferable, never direct. An attributed_skill may support
+`transferable`, and `direct` only when that experience's own text bears it out — quote
+what the work says, never the skills list. Familiarity with a product does not
 demonstrate marketing, sales or other duties involving it.
 Recognize transferable experience when the technology or wording differs but the work is
 the same kind of work. Read negations, alternatives and preferred-only language.

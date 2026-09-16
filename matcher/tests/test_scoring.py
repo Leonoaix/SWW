@@ -69,8 +69,9 @@ def test_the_score_always_equals_its_own_breakdown():
     assert 0 <= result["score"] <= 100
 
 
-def profile(demonstrated=("Python",), listed=("Rust",)):
+def profile(demonstrated=("Python",), listed=("Rust",), attributed=("Go",)):
     return CandidateProfile(skills=[SkillClaim(name=name, evidence="demonstrated") for name in demonstrated]
+                            + [SkillClaim(name=name, evidence="attributed") for name in attributed]
                             + [SkillClaim(name=name, evidence="listed") for name in listed])
 
 
@@ -92,6 +93,22 @@ def test_local_score_counts_a_listed_only_skill_at_half():
     absent = score_local(job("1"), profile(), ["Kotlin"], {}, 0.0, True)
     assert demonstrated["score"] > listed["score"] > absent["score"]
     assert listed["listed_only_skills"] == ["Rust"]
+
+
+def test_a_skill_tied_to_one_job_scores_between_demonstrated_and_listed():
+    """Three tiers because there are three things to say. A resume that
+    describes outcomes without naming its tools was scored as though it had
+    only ever written them in a table."""
+    demonstrated = score_local(job("1"), profile(), ["Python"], {}, 0.0, True)
+    attributed = score_local(job("1"), profile(), ["Go"], {}, 0.0, True)
+    listed = score_local(job("1"), profile(), ["Rust"], {}, 0.0, True)
+    assert demonstrated["score"] > attributed["score"] > listed["score"]
+    assert attributed["attributed_skills"] == ["Go"]
+    assert attributed["matched_skills"] == [] and attributed["listed_only_skills"] == []
+    # Three quarters of a demonstrated skill, which is the midpoint between
+    # the table and the work.
+    gap = demonstrated["score"] - listed["score"]
+    assert attributed["score"] - listed["score"] == pytest.approx(0.5 * gap, abs=0.01)
 
 
 def test_local_score_warns_when_no_embedding_model_is_installed():

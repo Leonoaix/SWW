@@ -167,3 +167,45 @@ async def test_an_undated_entry_comes_back_as_null_and_is_read_as_unstated(store
     assert analysis.profile.headline == "" and analysis.profile.domains == []
     # A null availability is not an empty one: the resume's own statement fills it.
     assert analysis.profile.availability.months == [4]
+
+
+async def test_a_listed_skill_the_model_ties_to_one_job_sits_between_the_two(store):
+    """The common resume describes outcomes without naming tools: a backend
+    co-op whose bullets never write "Python". Filing that with the bare list
+    entries discounted the candidate's core stack. It is still not
+    demonstrated — the work does not say it — so it gets its own tier."""
+    blocks = segment(RESUME)
+    experience = next(block for block in blocks if block.kind == "experience")
+    client = FakeClient()
+    client.responses["match"] = {
+        "headline": "", "domains": [], "education": [], "availability": {},
+        "experiences": [{"block_id": experience.id, "anchor": "Software Engineering Intern",
+                         "kind": "work", "title": "Intern", "organization": "Example Corp",
+                         "start": "May 2025", "end": "Aug 2025", "months": 4,
+                         "summary": "构建异步服务", "highlights": [],
+                         # Rust is listed in the fixture but used in no described work.
+                         "technologies": ["Rust", "Python"]}]}
+    profile = (await build_profile(RESUME, Extractor(client, store, "test"))).profile
+    assert "Rust" in profile.attributed_skills
+    assert "Rust" not in profile.demonstrated_skills and "Rust" not in profile.listed_skills
+    # The tier records which experience it was tied to, not just that it was.
+    claim = next(item for item in profile.skills if item.name == "Rust")
+    assert experience.id in claim.block_ids
+
+
+async def test_a_tool_named_nowhere_in_the_resume_is_still_refused(store):
+    """The guard this tier must not weaken: the model cannot introduce
+    experience with a technology the resume never mentions."""
+    blocks = segment(RESUME)
+    experience = next(block for block in blocks if block.kind == "experience")
+    client = FakeClient()
+    client.responses["match"] = {
+        "headline": "", "domains": [], "education": [], "availability": {},
+        "experiences": [{"block_id": experience.id, "anchor": "Software Engineering Intern",
+                         "kind": "work", "title": "Intern", "organization": "Example Corp",
+                         "start": "May 2025", "end": "Aug 2025", "months": 4,
+                         "summary": "构建异步服务", "highlights": [],
+                         "technologies": ["Kubernetes"]}]}
+    profile = (await build_profile(RESUME, Extractor(client, store, "test"))).profile
+    for tier in (profile.demonstrated_skills, profile.attributed_skills, profile.listed_skills):
+        assert "Kubernetes" not in tier
