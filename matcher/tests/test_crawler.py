@@ -561,6 +561,16 @@ showPage(1);
 </script></body></html>'''
 
 
+# A board with no bulk-select checkbox: the id exists only in the title's
+# onclick handler. This is the layout `dataViewerSelection` alone cannot find.
+ONCLICK_ONLY = (MULTIPAGE
+    .replace("""<tr><td><input name="dataViewerSelection" value="${id}"></td>
+     <td>""", """<tr><td>""")
+    .replace("<tr><th></th><th>Job Title</th>", "<tr><th>Job Title</th>")
+    # The real board's handler name; it is what carries the id here.
+    .replace("showDetail", "getPostingOverview"))
+
+
 async def board(tmp_path, html=MULTIPAGE):
     """A logged-in browser sitting on a synthetic board."""
     crawler = WaterlooWorksCrawler(tmp_path)
@@ -602,6 +612,22 @@ async def test_the_posting_is_found_on_a_later_page(tmp_path):
     try:
         result = await crawler.open_posting(placeholder_url("485675"), job_id="485675")
         assert result["opened"] == "dialog"
+        assert parse_detail(await crawler._page.content(), "485675")
+    finally:
+        await crawler.close()
+
+
+async def test_a_board_without_bulk_select_checkboxes_still_finds_the_row(tmp_path):
+    """Most postings express their id only through `getPostingOverview('...')`.
+    Locating the row goes through the same listing parse the crawl uses, so
+    every way the board spells an id works; a selector written against one of
+    them would silently miss the boards that use another."""
+    crawler = await board(tmp_path, ONCLICK_ONLY)
+    try:
+        assert "dataViewerSelection" not in await crawler._page.content()
+        result = await crawler.open_posting(placeholder_url("485675"), job_id="485675")
+        assert result["opened"] == "dialog"
+        assert result["pages_searched"] == 3
         assert parse_detail(await crawler._page.content(), "485675")
     finally:
         await crawler.close()

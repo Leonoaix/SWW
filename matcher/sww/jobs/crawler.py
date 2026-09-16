@@ -197,41 +197,58 @@ class WaterlooWorksCrawler:
         return await self._open_from_board(job_id, max_pages)
 
     async def _open_from_board(self, job_id: str, max_pages: int) -> dict:
-        """Walk the board to the posting and click it open."""
-        row = f'tr:has(input[name="dataViewerSelection"][value="{job_id}"])'
+        """Walk the board to the posting and click it open.
+
+        The row is located through the same listing parse the crawl uses, so
+        the posting is found however its id happens to be expressed — the
+        bulk-select checkbox, a `data-job-id`, the href's query, or the
+        `getPostingOverview('...')` handler — and in the card layout as well
+        as the table one. A hand-written selector for any one of those would
+        silently miss every board that uses another.
+        """
+        if self._page is None or self._page.is_closed():
+            self._page = await self._context.new_page()
+            await self._goto(self._page, JOBS_URL)
         await self._close_modal()
         if not safe_job_url(self._page.url):
             await self._goto(self._page, JOBS_URL)
         await self._ensure_my_program()
         listing = await self._wait_listing()
 
-        for _ in range(max(1, max_pages)):
-            if await self._page.locator(row).count():
-                title = self._page.locator(f"{row} a.overflow--ellipsis")
-                if not await title.count():
-                    title = self._page.locator(f"{row} a").first
+        for searched in range(1, max(1, max_pages) + 1):
+            target = listing.targets.get(job_id)
+            if target:
+                before = set(self._context.pages)
                 await self._throttle()
-                await title.first.click()
-                await self._await_dialog(job_id)
-                await self._page.bring_to_front()
-                return {"opened": "dialog", "url": self._page.url,
-                        "pages_searched": len(self._seen_pages)}
+                await self._page.locator(target.selector).click()
+                opened = await self._await_posting(job_id, before)
+                await opened.bring_to_front()
+                # Unlike a crawl, this leaves the posting up: it is the thing
+                # that was asked for, not a step on the way somewhere else.
+                return {"opened": "dialog" if opened is self._page else "page",
+                        "url": opened.url, "pages_searched": searched}
             if listing.next_page is None:
                 break
             previous = tuple(job["id"] for job in listing.jobs)
-            self._seen_pages.add(previous)
             listing = await self._navigate(listing.next_page, previous)
         raise LookupError(f"Posting {job_id} was not found on the current board.")
 
-    async def _await_dialog(self, job_id: str) -> None:
-        """Wait for the posting's own dialog, not merely for any dialog."""
+    async def _await_posting(self, job_id: str, before: set):
+        """Wait for this posting, not merely for something to appear.
+
+        A title may open a modal, a popup or a new tab, so the page to watch
+        is whichever one arrived.
+        """
         for wait in self._poll_intervals(budget=20.0):
-            html = await self._content()
-            if parse_detail(html, job_id):
-                return
+            fresh = [page for page in self._context.pages if page not in before]
+            page = fresh[0] if fresh else self._page
+            if page.url != "about:blank" and parse_detail(await self._content(page), job_id):
+                return page
             await self._settle(wait)
-        # The dialog may be open but unparseable; that is still what the user
-        # asked for, so do not close it or claim failure.
+        # It may be open but unparseable, which is still what was asked for.
+        # Leave it up rather than closing it and reporting a failure.
+        fresh = [page for page in self._context.pages if page not in before]
+        return fresh[0] if fresh else self._page
 
     async def open_browser(self) -> None:
         """Open a dedicated persistent profile for the user's manual login.
