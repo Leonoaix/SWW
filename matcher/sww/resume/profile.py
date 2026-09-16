@@ -29,10 +29,11 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .. import config
 from ..config import MAX_RESUME_API_CHARACTERS
 from ..llm import DeepSeekError, Extractor
 from ..text import collapse, normalise_durations, unique
-from .segment import Block, block_containing, prepare
+from .segment import Block, block_containing, months_since, prepare
 from .skills import extract_skills, find_mentions
 
 VERSION = "resume-profile-v1"
@@ -82,6 +83,9 @@ class ExperienceItem(BaseModel):
     start: str = Field(default="", max_length=60)
     end: str = Field(default="", max_length=60)
     months: Optional[int] = Field(default=None, ge=0, le=600)
+    # Whole months since this ended; 0 while ongoing, None when no end date
+    # could be read from the resume.
+    months_ago: Optional[int] = Field(default=None, ge=0, le=1200)
     summary: str = Field(default="", max_length=800)
     highlights: list[str] = Field(default_factory=list, max_length=12)
     technologies: list[str] = Field(default_factory=list, max_length=40)
@@ -91,6 +95,20 @@ class ExperienceItem(BaseModel):
         parts = [self.title, self.organization, self.summary, *self.highlights,
                  ", ".join(self.technologies)]
         return "\n".join(part for part in parts if part.strip())
+
+    @property
+    def recency(self) -> float:
+        """How much this experience should weigh, by how long ago it ended.
+
+        This is a *relevance* weight, not a discount on evidence. Older work
+        still proves the candidate did it; it is simply weaker evidence of what
+        they are fluent in now and of what they want to do next. Nothing in the
+        scoring of verified criteria consults this.
+        """
+        if self.months_ago is None:
+            return config.RECENCY_UNKNOWN
+        decay = 0.5 ** (self.months_ago / config.RECENCY_HALF_LIFE_MONTHS)
+        return round(config.RECENCY_FLOOR + (1 - config.RECENCY_FLOOR) * decay, 4)
 
 
 class Availability(BaseModel):
@@ -173,6 +191,25 @@ class ResumeAnalysis(BaseModel):
         return [block for block in self.blocks if block.is_evidence]
 
 
+def _most_recent_first(items: list[ExperienceItem]) -> list[ExperienceItem]:
+    """Newest first, with undated experience after everything dated.
+
+    Order matters beyond presentation: the cross-encoder query and the model
+    payload are both length-capped, so whatever sorts last is what gets cut.
+    """
+    return sorted(items, key=lambda item: (item.months_ago is None,
+                                           item.months_ago if item.months_ago is not None else 0))
+
+
+def _months_ago(block: Optional[Block], now=None) -> Optional[int]:
+    """Months since this block's experience ended; 0 while ongoing."""
+    if block is None:
+        return None
+    if block.ongoing:
+        return 0
+    return months_since(block.ended, now) if block.ended else None
+
+
 def _skill_claims(text: str, blocks: list[Block], extra: list[str]) -> list[SkillClaim]:
     """Classify every skill by where it is actually written.
 
@@ -223,7 +260,7 @@ def _availability_from_text(text: str) -> Availability:
     return Availability(terms=unique(terms)[:12], months=months[:6])
 
 
-def heuristic_profile(text: str, blocks: list[Block]) -> CandidateProfile:
+def heuristic_profile(text: str, blocks: list[Block], now=None) -> CandidateProfile:
     """Structure the resume with no model call. Always available, never wrong
     about things it does not claim: unknown fields stay empty."""
     experiences = []
@@ -246,6 +283,7 @@ def heuristic_profile(text: str, blocks: list[Block]) -> CandidateProfile:
         experiences.append(ExperienceItem(
             block_id=block.id,
             anchor=collapse(headline)[:200],
+            months_ago=_months_ago(block, now),
             kind={"experience": "work", "project": "project", "publication": "research",
                   "activity": "leadership"}.get(block.kind, "other"),
             title=title,
@@ -265,6 +303,7 @@ def heuristic_profile(text: str, blocks: list[Block]) -> CandidateProfile:
             graduation_year=max(year) if year else "",
         ))
     claims = _skill_claims(text, blocks, [])
+    experiences = _most_recent_first(experiences)
     return CandidateProfile(
         headline=collapse(blocks[0].text.splitlines()[0]) if blocks else "",
         domains=[], education=education[:10], experiences=experiences[:30], skills=claims,
@@ -276,14 +315,15 @@ def heuristic_profile(text: str, blocks: list[Block]) -> CandidateProfile:
     )
 
 
-async def build_profile(text: str, extractor: Optional[Extractor] = None) -> ResumeAnalysis:
+async def build_profile(text: str, extractor: Optional[Extractor] = None,
+                        now=None) -> ResumeAnalysis:
     """Segment, then structure. Falls back to heuristics without an extractor."""
     text, blocks = prepare(text)
     warnings: list[str] = []
     if not any(block.is_evidence for block in blocks):
         warnings.append("未识别出工作或项目段落；匹配将只能依赖技能清单，证据强度较弱。")
     if extractor is None:
-        profile = heuristic_profile(text, blocks)
+        profile = heuristic_profile(text, blocks, now)
         return ResumeAnalysis(text=text, blocks=blocks, profile=profile,
                               warnings=warnings + profile.warnings)
 
@@ -309,10 +349,12 @@ async def build_profile(text: str, extractor: Optional[Extractor] = None) -> Res
     experiences = []
     for item in draft.experiences:
         block = next((b for b in blocks if b.id == item.block_id), None)
-        # Duration the resume actually states wins over the model's arithmetic.
+        # Dates the resume actually states win over the model's arithmetic.
         months = block.months if block is not None and block.months is not None else item.months
-        experiences.append(item.model_copy(update={"months": months}))
+        experiences.append(item.model_copy(
+            update={"months": months, "months_ago": _months_ago(block, now)}))
     technologies = [name for item in experiences for name in item.technologies]
+    experiences = _most_recent_first(experiences)
     profile = CandidateProfile(
         headline=draft.headline, domains=draft.domains[:12], education=draft.education,
         experiences=experiences, skills=_skill_claims(text, blocks, technologies),
@@ -346,14 +388,16 @@ def prompt_payload(analysis: "ResumeAnalysis") -> dict:
         experiences.append({
             "ref": item.block_id, "kind": item.kind, "title": item.title,
             "organization": item.organization, "start": item.start, "end": item.end,
-            "months": item.months, "technologies": item.technologies,
+            "months": item.months, "months_ago": item.months_ago,
+            "technologies": item.technologies,
             "text": (block.text if block is not None else item.as_text())[:4000],
         })
     if not experiences:
         # Nothing segmented into an experience: quote from the whole resume
         # rather than sending a profile with no quotable evidence at all.
         experiences = [{"ref": "resume", "kind": "other", "title": "", "organization": "",
-                        "start": "", "end": "", "months": None, "technologies": [],
+                        "start": "", "end": "", "months": None, "months_ago": None,
+                        "technologies": [],
                         "text": analysis.text[:12000]}]
     return {
         "headline": profile.headline,
@@ -366,6 +410,20 @@ def prompt_payload(analysis: "ResumeAnalysis") -> dict:
         "work_experience_months": profile.work_experience_months,
         "experiences": experiences,
     }
+
+
+def evidence_recency(analysis: ResumeAnalysis, quote: str) -> Optional[float]:
+    """The recency weight of the experience a quote came from, if it came from one.
+
+    Resolved from the block the quote actually sits in, not from whatever the
+    model said it cited, and None for a quote outside any dated experience.
+    """
+    block = block_containing(analysis.blocks, quote)
+    if block is None:
+        return None
+    item = next((entry for entry in analysis.profile.experiences
+                 if entry.block_id == block.id), None)
+    return item.recency if item is not None else None
 
 
 def verify_quote(analysis: ResumeAnalysis, quote: str) -> tuple[bool, bool]:

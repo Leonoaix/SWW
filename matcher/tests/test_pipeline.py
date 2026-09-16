@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from conftest import RESUME, FakeClient, job, judgement_payload, requirements_payload
+from conftest import FakeClient, NOW, RESUME, job, judgement_payload, requirements_payload
 from sww.embedding import available, load_embedder
 from sww.llm import Extractor
 from sww.match.pipeline import (
@@ -17,7 +17,7 @@ LAB = job("lab", "Laboratory Technician", "Prepare cell cultures and run PCR ass
 
 
 async def rank(jobs, preferences=None, embedder=None, limit=100):
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     return rank_local(analysis, jobs, preferences or {}, limit, embedder)
 
 
@@ -74,7 +74,7 @@ async def test_paraphrased_posting_is_no_longer_sunk_by_vocabulary_coverage():
 
 
 async def test_semantic_ranking_shortlists_and_reports_what_it_skipped(store):
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     client = FakeClient(judgements=judgement_payload(
         "direct", "Built asynchronous Python services with durable queues"))
     ranker = SemanticRanker(Extractor(client, store, "test"))
@@ -89,7 +89,7 @@ async def test_semantic_ranking_shortlists_and_reports_what_it_skipped(store):
 
 
 async def test_shortlist_zero_assesses_everything(store):
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     client = FakeClient(judgements=judgement_payload(
         "direct", "Built asynchronous Python services with durable queues"))
     ranker = SemanticRanker(Extractor(client, store, "test"))
@@ -103,7 +103,7 @@ async def test_shortlist_zero_assesses_everything(store):
 
 
 async def test_restricted_postings_never_reach_the_model(store):
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     client = FakeClient()
     ranker = SemanticRanker(Extractor(client, store, "test"))
     restricted = job("r", description="SWPP. Canadian citizenship is required.")
@@ -114,7 +114,7 @@ async def test_restricted_postings_never_reach_the_model(store):
 
 
 async def test_a_second_run_reuses_the_cache_and_spends_nothing(store):
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     client = FakeClient(judgements=judgement_payload(
         "direct", "Built asynchronous Python services with durable queues"))
     postings = [job("1", "Backend Developer",
@@ -132,7 +132,7 @@ async def test_a_second_run_reuses_the_cache_and_spends_nothing(store):
 async def test_requirements_extracted_once_feed_the_next_run_s_retrieval(store):
     """The second run compares the resume against the posting's real
     requirements instead of against sentences chopped out of its prose."""
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     postings = [job("1", "Backend Developer",
                     "Develop reliable event-driven services using durable message queues.")]
     assert cached_requirement_chunks(store, postings) == {}
@@ -149,7 +149,7 @@ async def test_requirements_extracted_once_feed_the_next_run_s_retrieval(store):
 
 
 async def test_local_ranking_reports_which_signals_it_actually_used():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     postings = [job("1", "Backend Developer", "Durable message queues.")]
     bare = rank_local(analysis, postings, {}, embedder=None, reranker=None)
     assert bare["reranked_jobs"] == 0

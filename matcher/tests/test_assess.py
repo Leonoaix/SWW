@@ -1,7 +1,7 @@
 """Evidence verification: what the model says versus what the resume says."""
 import pytest
 
-from conftest import JOB, RESUME, FakeClient, judgement_payload, requirements_payload
+from conftest import FakeClient, JOB, NOW, RESUME, judgement_payload, requirements_payload
 from sww.jobs.requirements import (
     JobRequirements, cache_key, extract_requirements, load_cached,
 )
@@ -12,7 +12,7 @@ from sww.resume import build_profile
 
 
 async def judge(store, judgements, resume=RESUME, requirements=None):
-    analysis = await build_profile(resume)
+    analysis = await build_profile(resume, now=NOW)
     client = FakeClient(requirements=requirements or requirements_payload(), judgements=judgements)
     extractor = Extractor(client, store, "test")
     parsed = JobRequirements.model_validate(client.responses["requirements"])
@@ -43,7 +43,32 @@ async def test_work_evidence_still_counts_when_the_resume_also_has_a_skills_list
     criteria, _, _ = await judge(store, judgement_payload(
         "direct", "Built asynchronous Python services with durable queues"))
     assert criteria[0]["status"] == "direct"
-    assert score_criteria(JOB, criteria, {})["score"] == 100.0
+    scored = score_criteria(JOB, criteria, {})
+    # 90 for full coverage, plus the recency dimension. The internship ended
+    # 13 months before the pinned date, so it is recent but not current.
+    assert scored["score_breakdown"]["experience"] == 90.0
+    assert 0.75 < scored["recency_alignment"] < 0.9
+    assert scored["score"] == pytest.approx(98.1, abs=0.1)
+
+
+async def test_the_same_evidence_scores_higher_when_it_is_more_recent(store):
+    """The point of the dimension: identical coverage, different freshness."""
+    quote = "Built asynchronous Python services with durable queues"
+    fresh, _, _ = await judge(store, judgement_payload("direct", quote))
+    stale, _, _ = await judge(
+        store, judgement_payload("direct", quote),
+        resume=RESUME.replace("May 2025 - Aug 2025", "May 2019 - Aug 2019"))
+    assert score_criteria(JOB, fresh, {})["score"] > score_criteria(JOB, stale, {})["score"]
+    assert score_criteria(JOB, stale, {})["score_breakdown"]["experience"] == 90.0
+
+
+async def test_recency_never_substitutes_for_coverage(store):
+    """A requirement nothing answers says nothing about how current you are."""
+    criteria, _, _ = await judge(store, judgement_payload("missing", ""))
+    scored = score_criteria(JOB, criteria, {})
+    assert scored["recency_alignment"] is None
+    assert "recency" not in scored["score_breakdown"]
+    assert scored["score"] == 0.0
 
 
 async def test_every_requirement_must_be_judged(store):

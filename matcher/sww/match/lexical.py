@@ -57,15 +57,21 @@ class BM25:
         return results
 
 
-def weighted_query(demonstrated: Iterable[str], listed: Iterable[str],
+def weighted_query(demonstrated: Iterable[tuple[str, float]], listed: Iterable[str],
                    listed_weight: float = config.LISTED_SKILL_WEIGHT) -> tuple[list[str], dict[str, float]]:
-    """Query terms plus per-term weights, from the two kinds of skill claim."""
+    """Query terms plus per-term weights.
+
+    `demonstrated` is (text, weight) per experience, so recency carries into
+    the lexical half as well as the semantic one. A term used in several
+    experiences takes the strongest — most recent — of them, rather than being
+    dragged down by having also appeared years ago.
+    """
     query: list[str] = []
     weights: dict[str, float] = {}
-    for text in demonstrated:
+    for text, weight in demonstrated:
         for term in tokens(text):
             query.append(term)
-            weights[term] = 1.0
+            weights[term] = max(weights.get(term, 0.0), weight)
     for text in listed:
         for term in tokens(text):
             query.append(term)

@@ -1,11 +1,17 @@
 """Shared fixtures. Every fixture is synthetic; none touches a real account."""
 import asyncio
+from datetime import date
 
 import pytest
 
 from sww.llm import Extractor
 from sww.resume import build_profile
 from sww.store import Store
+
+# Recency is measured against today, so every test pins a reference date.
+# Without it an assertion about a score would drift a little each month and
+# fail some morning for no reason anyone could reproduce.
+NOW = date(2026, 9, 15)
 
 RESUME = """Example Student
 student@example.com | Waterloo, ON
@@ -111,8 +117,8 @@ def extractor(store):
 
 @pytest.fixture
 def analysis():
-    """The local (no-model) split of the sample resume."""
-    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(build_profile(RESUME))
+    """The local (no-model) split of the sample resume, at a fixed date."""
+    return asyncio.new_event_loop().run_until_complete(build_profile(RESUME, now=NOW))
 
 
 def seed_resume(app, text=RESUME, filename="private.pdf"):

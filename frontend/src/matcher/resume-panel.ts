@@ -14,8 +14,15 @@ const KIND_LABELS: Record<string, string> = {
 
 function experienceRow(item: Resume["experiences"][number]): HTMLLIElement {
   const entry = element("li", "resume-experience");
-  entry.append(element("span", "skill-chip",
-    [KIND_LABELS[item.kind] || item.kind, item.months ? `${item.months} 个月` : "时长未标注"].join(" · ")));
+  entry.append(element("span", "skill-chip", [
+    KIND_LABELS[item.kind] || item.kind,
+    item.months ? `${item.months} 个月` : "时长未标注",
+    // Recency is a scoring dimension, so the date it is derived from is shown.
+    item.months_ago === null ? "日期未识别"
+      : item.months_ago === 0 ? "进行中"
+      : item.months_ago < 12 ? `${item.months_ago} 个月前`
+      : `${(item.months_ago / 12).toFixed(1)} 年前`,
+  ].join(" · ")));
   entry.append(element("span", "resume-experience-name",
     [item.title, item.organization].filter(Boolean).join(" @ ") || "未能识别标题"));
   if (item.technologies.length) {

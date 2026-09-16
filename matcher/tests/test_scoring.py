@@ -97,3 +97,44 @@ def test_local_score_counts_a_listed_only_skill_at_half():
 def test_local_score_warns_when_no_embedding_model_is_installed():
     result = score_local(job("1"), profile(), ["Python"], {}, 0.5, semantic=False)
     assert any("BM25" in warning or "词频" in warning for warning in result["warnings"])
+
+
+def test_recency_is_scored_from_the_evidence_not_the_posting():
+    """The dimension asks "does this match what I have been doing lately",
+    which is a fact about the candidate's evidence, not about the job."""
+    fresh = score_criteria(job("1"), [{**criterion(), "recency": 1.0}], {})
+    stale = score_criteria(job("1"), [{**criterion(), "recency": 0.45}], {})
+    assert fresh["score"] > stale["score"]
+    assert fresh["recency_alignment"] == 1.0 and stale["recency_alignment"] == 0.45
+    # Coverage is identical; only the recency dimension moved.
+    assert fresh["score_breakdown"]["technical"] == stale["score_breakdown"]["technical"]
+
+
+def test_unsupported_criteria_contribute_no_recency():
+    scored = score_criteria(job("1"), [{**criterion("direct"), "recency": 1.0},
+                                       {**criterion("missing", requirement="b"), "recency": 0.1}], {})
+    assert scored["recency_alignment"] == 1.0   # the missing one is not averaged in
+
+
+def test_must_have_evidence_dominates_the_recency_average():
+    scored = score_criteria(job("1"), [
+        {**criterion("direct", importance="must", requirement="a"), "recency": 1.0},
+        {**criterion("direct", importance="preferred", requirement="b"), "recency": 0.4},
+    ], {})
+    assert 0.75 < scored["recency_alignment"] < 0.85   # 2:1 weighting
+
+
+def test_undated_evidence_leaves_the_dimension_unscored():
+    scored = score_criteria(job("1"), [criterion()], {})
+    assert scored["recency_alignment"] is None
+    assert "recency" not in scored["score_breakdown"]
+    assert scored["score"] == 100.0      # the budget is not withheld either
+
+
+def test_local_recency_cannot_earn_points_without_a_match():
+    """Scoring recency on its own let a posting that matched nothing collect
+    the points for having its nothing attributed to a recent experience."""
+    matched = score_local(job("1"), profile(), [], {}, relevance=0.9, semantic=True, recency=1.0)
+    unmatched = score_local(job("1"), profile(), [], {}, relevance=0.0, semantic=True, recency=1.0)
+    assert unmatched["score"] == 0.0
+    assert matched["score_breakdown"]["recency"] > 0

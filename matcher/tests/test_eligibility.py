@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from conftest import RESUME, FakeClient, job
+from conftest import FakeClient, NOW, RESUME, job
 from sww.llm import Extractor
 from sww.match.filters import eligible
 from sww.match.pipeline import SemanticRanker, rank_local
@@ -11,7 +11,7 @@ from sww.resume import build_profile
 
 
 async def local(jobs, preferences=None):
-    return rank_local(await build_profile(RESUME), jobs, preferences or {})
+    return rank_local(await build_profile(RESUME, now=NOW), jobs, preferences or {})
 
 
 @pytest.mark.parametrize("text", [
@@ -81,6 +81,6 @@ async def test_restricted_postings_never_reach_the_model(store):
     client = FakeClient()
     ranker = SemanticRanker(Extractor(client, store, "test"))
     restricted = job("r", description="SWPP. Canadian citizenship is required.")
-    result = await ranker.rank(await build_profile(RESUME), [restricted], {}, refine_pairs=0)
+    result = await ranker.rank(await build_profile(RESUME, now=NOW), [restricted], {}, refine_pairs=0)
     assert result["jobs"] == [] and result["excluded_jobs"]
     assert client.usage["requests"] == 0

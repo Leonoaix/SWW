@@ -245,3 +245,16 @@ def test_resume_to_top_100_and_csv(local, extension, mime, builder):
     exported = client.get("/matcher-api/export.csv")
     rows = list(csv.DictReader(io.StringIO(exported.text.lstrip("﻿"))))
     assert len(rows) == 100
+
+
+def test_the_resume_summary_carries_the_dates_recency_is_scored_from(local):
+    """The panel shows how long ago each experience was, so the dimension that
+    moves the ranking is visible rather than invisible arithmetic."""
+    client, app, _ = local
+    seed_resume(app)
+    body = client.get("/matcher-api/resume/profile").json()
+    experiences = body["experiences"]
+    assert all(item["months_ago"] is not None for item in experiences)
+    assert all(0 < item["recency"] <= 1 for item in experiences)
+    # Newest first, so a length-capped prompt or query drops the oldest.
+    assert experiences == sorted(experiences, key=lambda item: item["months_ago"])

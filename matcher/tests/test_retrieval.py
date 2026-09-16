@@ -1,7 +1,7 @@
 """Retrieval: BM25, and requirement-level semantic matching when a model exists."""
 import pytest
 
-from conftest import RESUME, job
+from conftest import NOW, RESUME, job
 from sww.embedding import available, load_embedder
 from sww.match.lexical import BM25, weighted_query
 from sww.match.retrieval import job_chunks, resume_chunks, retrieve
@@ -30,14 +30,23 @@ def test_bm25_normalises_for_document_length():
 
 
 def test_listed_skills_weigh_less_than_demonstrated_ones():
-    query, weights = weighted_query(["built services with Python"], ["Rust"])
+    query, weights = weighted_query([("built services with Python", 1.0)], ["Rust"])
     assert weights["python"] == 1.0
     assert weights["rust"] < 1.0
     assert "rust" in query
 
 
+def test_a_term_takes_the_weight_of_the_most_recent_experience_using_it():
+    """Having also used something years ago must not drag down having used it
+    last term."""
+    query, weights = weighted_query(
+        [("Python and Fortran", 0.4), ("Python services", 0.95)], [])
+    assert weights["python"] == 0.95     # the recent use wins
+    assert weights["fortran"] == 0.4     # the old one keeps its own weight
+
+
 async def test_resume_chunks_prefer_experience_over_the_skills_list():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     chunks = resume_chunks(analysis)
     labels = [chunk.label for chunk in chunks]
     assert any(label.startswith("work") for label in labels)
@@ -54,7 +63,7 @@ def test_job_chunks_follow_extracted_requirements_when_present():
 
 
 async def test_bm25_only_retrieval_still_ranks_and_reports_no_semantic_score():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     results = retrieve(analysis, [PARAPHRASED, KEYWORD_STUFFED, UNRELATED], embedder=None)
     assert all(item.semantic is None for item in results)
     assert all(0 <= item.relevance <= 1 for item in results)
@@ -62,7 +71,7 @@ async def test_bm25_only_retrieval_still_ranks_and_reports_no_semantic_score():
 
 @pytest.mark.skipif(not available(), reason="Install the embeddings extra to run semantic retrieval")
 async def test_semantic_retrieval_finds_paraphrased_work_the_vocabulary_misses():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     embedder = load_embedder()
     results = {item.job_id: item for item in
                retrieve(analysis, [PARAPHRASED, UNRELATED], embedder=embedder)}
@@ -78,7 +87,7 @@ async def test_relevance_is_calibrated_not_normalised_against_the_batch():
     What must never happen is the batch-maximum rescaling this replaced, under
     which one strong new posting dragged every other score down.
     """
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     embedder = load_embedder()
     alone = retrieve(analysis, [UNRELATED], embedder=embedder)[0]
     with_others = {item.job_id: item for item in

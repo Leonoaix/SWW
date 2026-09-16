@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Iterator, Literal, Optional
 
 from ..text import clean_unicode, collapse
@@ -64,6 +65,11 @@ class Block:
     end: int
     bullets: list[str] = field(default_factory=list)
     months: Optional[int] = None
+    # When this experience finished, for recency weighting. `ongoing` means the
+    # resume said "Present"; `ended is None` with `ongoing` false means no date
+    # could be read, which must not be treated as either recent or ancient.
+    ended: Optional[tuple[int, int]] = None
+    ongoing: bool = False
 
     @property
     def is_evidence(self) -> bool:
@@ -131,19 +137,24 @@ def _heading_kind(line: str) -> Optional[BlockKind]:
     return None
 
 
-def _months_between(text: str) -> Optional[int]:
-    """Duration in months for the first date range on a line, if one parses."""
+def _date_range(text: str) -> tuple[Optional[tuple[int, int]], Optional[tuple[int, int]], bool]:
+    """Parse the first date range on a line into (start, end, ongoing).
+
+    `end` is None when the range has no parseable end; `ongoing` says that end
+    was the word "Present" rather than something unreadable, which is the
+    difference between "still doing it" and "we could not tell".
+    """
     match = _DATE_RANGE.search(text)
     if not match:
-        return None
+        return None, None, False
 
-    def point(value: str) -> Optional[tuple[int, int]]:
+    def point(value: str) -> tuple[Optional[tuple[int, int]], bool]:
         value = value.strip().rstrip(".").casefold()
         if re.fullmatch(r"present|current|now|今", value):
-            return None
+            return None, True
         year = re.search(r"\d{4}", value)
         if not year:
-            return None
+            return None, False
         month = 1
         if name := re.search(r"[a-z]{3,}", value):
             key = name.group()[:3]
@@ -151,18 +162,29 @@ def _months_between(text: str) -> Optional[int]:
                 next((season for season in _SEASON_MONTH if value.startswith(season)), ""), 1)
         elif numeric := re.match(r"(\d{1,2})[/-]\d{4}", value):
             month = min(12, max(1, int(numeric.group(1))))
-        return int(year.group()), month
+        return (int(year.group()), month), False
 
-    parts = re.split(r"\s*(?:[-–—]|to|至|~)\s*", match.group(), maxsplit=1, flags=re.I)
+    parts = re.split(r"\s*(?:[-\u2013\u2014]|to|至|~)\s*", match.group(), maxsplit=1, flags=re.I)
     if len(parts) != 2:
-        return None
-    start, end = point(parts[0]), point(parts[1])
-    if start is None:
-        return None
-    if end is None:  # "Present" — not a duration we can claim, only a start.
+        return None, None, False
+    start, _ = point(parts[0])
+    end, ongoing = point(parts[1])
+    return start, end, ongoing
+
+
+def _months_between(text: str) -> Optional[int]:
+    """Duration in months for the first date range on a line, if one parses."""
+    start, end, _ = _date_range(text)
+    if start is None or end is None:  # "Present" is a start, not a duration.
         return None
     span = (end[0] - start[0]) * 12 + (end[1] - start[1]) + 1
     return span if 0 < span <= 600 else None
+
+
+def months_since(point: tuple[int, int], now: Optional[date] = None) -> int:
+    """Whole months from a (year, month) to today. Never negative."""
+    now = now or date.today()
+    return max(0, (now.year - point[0]) * 12 + (now.month - point[1]))
 
 
 def _entries(lines: list[tuple[int, str]], kind: BlockKind) -> Iterator[list[tuple[int, str]]]:
@@ -243,6 +265,8 @@ def prepare(text: str) -> tuple[str, list[Block]]:
                 start=start, end=end,
                 bullets=[collapse(_BULLET.sub("", line)) for _, line in body if _BULLET.match(line)],
                 months=_months_between(block_text) if kind in EVIDENCE_KINDS else None,
+                **(dict(zip(("ended", "ongoing"), _date_range(block_text)[1:]))
+                   if kind in EVIDENCE_KINDS else {}),
             ))
     return text, blocks
 

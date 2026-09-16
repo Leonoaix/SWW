@@ -131,6 +131,7 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
                         "chars": len(block.text)} for block in analysis.blocks],
             "experiences": [{"kind": item.kind, "title": item.title, "organization": item.organization,
                              "start": item.start, "end": item.end, "months": item.months,
+                             "months_ago": item.months_ago, "recency": item.recency,
                              "technologies": item.technologies} for item in profile.experiences],
         }
 

@@ -73,6 +73,12 @@ function detailContent(job: RankedJob): Node[] {
     parts.push(element("p", "field-hint",
       `本地检索相关度 ${(job.retrieval_score * 100).toFixed(1)}%（用于候选筛选，与最终分数分开计算）。`));
   }
+  if (job.recency_alignment !== null) {
+    parts.push(element("p", "field-hint",
+      `经历新近度 ${(job.recency_alignment * 100).toFixed(0)}%：支撑这个岗位的是你`
+      + `${job.recency_alignment > 0.85 ? "最近" : job.recency_alignment > 0.6 ? "较近" : "较早"}`
+      + "的经历。越近权重越高（两年半衰，下限 40%），只影响排序，不影响证据是否成立。"));
+  }
   if (job.warnings.length) {
     const warnings = element("ul", "warning-list");
     warnings.append(...job.warnings.map(warning => element("li", "", warning)));

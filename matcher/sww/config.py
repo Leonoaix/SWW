@@ -71,6 +71,22 @@ STATUS_CREDIT = {"direct": 1.0, "transferable": 0.6, "missing": 0.0, "unknown": 
 PREFERENCE_POINTS = 10
 CONFLICT_SCORE_CAP = 20
 
+# ---- Recency ---------------------------------------------------------------
+# Recent work weighs more: it is both what the candidate is currently fluent in
+# and the best signal of what they want to keep doing. Exponential decay with a
+# two-year half-life, floored so that older work never counts for nothing —
+# fundamentals do not expire, and a five-year-old project is still evidence.
+# Experience whose end date could not be read is treated as neither recent nor
+# old and keeps the neutral weight.
+RECENCY_HALF_LIFE_MONTHS = 24.0
+RECENCY_FLOOR = 0.4
+RECENCY_UNKNOWN = 0.7
+# Recency is also a scoring dimension: not "how new is the posting" but "does
+# this posting match what I have been doing lately, or something I did in first
+# year". Enough to reorder close calls, not enough to outrank real coverage.
+RECENCY_POINTS = 10
+RECENCY_POINTS_LOCAL = 15
+
 # ---- Cascade ---------------------------------------------------------------
 # Retrieval is free and runs over everything; the cross-encoder costs about
 # 38 ms per posting on a laptop CPU, so it reads the pool retrieval liked

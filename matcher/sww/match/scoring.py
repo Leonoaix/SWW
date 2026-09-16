@@ -54,6 +54,24 @@ def _coverage(criteria: Sequence[dict], categories: Sequence[str],
     return credit, total
 
 
+def _evidence_recency(criteria: Sequence[dict]) -> Optional[float]:
+    """Weighted mean recency of the experience that satisfied each requirement.
+
+    Only supported criteria count: a requirement nothing answers says nothing
+    about how current the candidate is. Must-haves weigh double, the same as in
+    the coverage they feed.
+    """
+    credit = total = 0.0
+    for item in criteria:
+        value = item.get("recency")
+        if value is None or item["status"] not in {"direct", "transferable"}:
+            continue
+        weight = config.IMPORTANCE_WEIGHTS.get(item["importance"], 1.0)
+        credit += weight * float(value)
+        total += weight
+    return credit / total if total else None
+
+
 def score_criteria(job: dict, criteria: list[dict], preferences: dict,
                    warnings: Optional[list[str]] = None,
                    retrieval: Optional[float] = None) -> dict:
@@ -68,9 +86,16 @@ def score_criteria(job: dict, criteria: list[dict], preferences: dict,
         coverage_by_category[name] = credit / total if total else 0.0
 
     preference_fraction = _preference_fraction(job, preferences)
-    # Preference points are only withheld from the evidence budget when the
-    # user actually expressed a preference to earn them with.
-    evidence_budget = 100 - (config.PREFERENCE_POINTS if preference_fraction is not None else 0)
+    # How recent the work that actually satisfied this posting's requirements
+    # is, weighted the same way the requirements are. None when nothing dated
+    # supported it, in which case the dimension is not scored at all rather
+    # than scored zero.
+    recency = _evidence_recency(criteria)
+    # Points are only withheld from the evidence budget when there is something
+    # to earn them with.
+    evidence_budget = (100
+                       - (config.PREFERENCE_POINTS if preference_fraction is not None else 0)
+                       - (config.RECENCY_POINTS if recency is not None else 0))
     weight_total = sum(config.CATEGORY_WEIGHTS[name] for name in scored_categories)
     fit = 0.0
     for name in scored_categories:
@@ -81,6 +106,8 @@ def score_criteria(job: dict, criteria: list[dict], preferences: dict,
     if not scored_categories:
         warnings.append("未识别出技术/经验/领域要求，分数仅反映资格与偏好项。")
 
+    if recency is not None:
+        breakdown["recency"] = round(config.RECENCY_POINTS * recency, 2)
     if preference_fraction is not None:
         breakdown["preferences"] = round(config.PREFERENCE_POINTS * preference_fraction, 2)
     score = round(sum(breakdown.values()), 2)
@@ -122,13 +149,14 @@ def score_criteria(job: dict, criteria: list[dict], preferences: dict,
         "must_have_coverage": round(must_credit / must_total, 3) if must_total else None,
         "must_have_count": int(sum(1 for item in criteria if item["importance"] == "must")),
         "retrieval_score": None if retrieval is None else round(retrieval, 4),
+        "recency_alignment": None if recency is None else round(recency, 4),
         "pairwise_reviews": [],
     }
 
 
 def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[str],
                 preferences: dict, relevance: float, semantic: bool,
-                reranked: bool = False) -> dict:
+                reranked: bool = False, recency: Optional[float] = None) -> dict:
     """Score without any model call.
 
     Relevance now carries the weight the vocabulary table used to, because it
@@ -148,11 +176,18 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
             partial.append(skill)
         else:
             missing.append(skill)
-    components: dict[str, tuple[float, float]] = {"relevance": (60.0, max(0.0, min(1.0, relevance)))}
+    components: dict[str, tuple[float, float]] = {"relevance": (55.0, max(0.0, min(1.0, relevance)))}
+    if recency is not None:
+        # Not the posting's age — how recent the candidate's matching work is,
+        # and only to the extent there is a match at all. Scoring recency on
+        # its own let a posting that matched nothing collect the points for
+        # having its nothing attributed to a recent experience.
+        components["recency"] = (float(config.RECENCY_POINTS_LOCAL),
+                                 max(0.0, min(1.0, recency)) * max(0.0, min(1.0, relevance)))
     if posting_skills:
         # A listed-but-never-used skill is half credit: it is a real claim and
         # a weaker one, which is exactly what the distinction is worth.
-        components["skill_overlap"] = (30.0, (len(matched) + 0.5 * len(partial)) / len(posting_skills))
+        components["skill_overlap"] = (25.0, (len(matched) + 0.5 * len(partial)) / len(posting_skills))
     preference_fraction = _preference_fraction(job, preferences)
     if preference_fraction is not None:
         components["preferences"] = (10.0, preference_fraction)
@@ -164,6 +199,8 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
               else "逐条要求与经历的最佳匹配" if semantic
               else "BM25 词频检索，未安装嵌入模型")
     reasons = ["相关度 %.1f%%（%s）。" % (100 * max(0.0, min(1.0, relevance)), source)]
+    if recency is not None:
+        reasons.append("与之匹配的经历新近度 %.0f%%（越近的经历权重越高，两年半衰）。" % (100 * recency))
     if posting_skills:
         reasons.append("岗位提到的 %d 项词表技能中，简历实践过 %d 项%s。" % (
             len(posting_skills), len(matched),
@@ -184,5 +221,6 @@ def score_local(job: dict, profile: CandidateProfile, posting_skills: Sequence[s
         "warnings": unique(warnings), "criteria": [], "eligibility": "needs_review",
         "ai_status": "local", "evidence_coverage": None, "must_have_coverage": None,
         "must_have_count": None, "retrieval_score": round(relevance, 4),
-        "reranked": reranked, "pairwise_reviews": [],
+        "reranked": reranked, "recency_alignment": None if recency is None else round(recency, 4),
+        "pairwise_reviews": [],
     }

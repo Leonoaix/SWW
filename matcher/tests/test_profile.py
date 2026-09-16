@@ -1,7 +1,7 @@
 """Structured resume decomposition, with and without a model."""
 import pytest
 
-from conftest import RESUME, FakeClient
+from conftest import FakeClient, NOW, RESUME
 from sww.llm import DeepSeekError, Extractor
 from sww.resume import build_profile, prompt_payload, verify_quote
 from sww.resume.skills import demonstrated_skills
@@ -9,7 +9,7 @@ from sww.resume.segment import segment
 
 
 async def test_local_split_produces_roles_durations_and_availability():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     profile = analysis.profile
     assert profile.source == "heuristic"
     assert [item.kind for item in profile.experiences] == ["work", "project"]
@@ -22,7 +22,7 @@ async def test_local_split_produces_roles_durations_and_availability():
 
 async def test_skills_are_split_by_where_they_are_written():
     """The distinction the old pipeline re-derived with a regex at scoring time."""
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     assert "Python" in analysis.profile.demonstrated_skills
     assert "SQL" in analysis.profile.demonstrated_skills
     # Named in the skills list, used in no described work.
@@ -36,14 +36,14 @@ def test_demonstrated_and_listed_are_disjoint():
 
 
 async def test_quote_verification_reports_both_existence_and_evidence():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     assert verify_quote(analysis, "asynchronous Python services with durable queues") == (True, True)
     assert verify_quote(analysis, "Languages: Python, SQL, Rust, Go") == (True, False)
     assert verify_quote(analysis, "Ten years of production experience") == (False, False)
 
 
 async def test_prompt_payload_carries_verbatim_evidence_but_not_the_skills_list():
-    analysis = await build_profile(RESUME)
+    analysis = await build_profile(RESUME, now=NOW)
     payload = prompt_payload(analysis)
     joined = "\n".join(item["text"] for item in payload["experiences"])
     assert "durable queues" in joined

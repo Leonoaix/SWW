@@ -25,7 +25,8 @@ export const strings = (value: unknown): string[] =>
 
 export interface Experience {
   kind: string; title: string; organization: string;
-  start: string; end: string; months: number | null; technologies: string[];
+  start: string; end: string; months: number | null; months_ago: number | null;
+  technologies: string[];
 }
 
 export interface Resume {
@@ -53,7 +54,7 @@ export interface RankedJob {
   matched_skills: string[]; missing_skills: string[];
   reasons: string[]; warnings: string[]; score_breakdown: JsonObject;
   must_have_coverage: number | null; must_have_count: number | null;
-  retrieval_score: number | null;
+  retrieval_score: number | null; recency_alignment: number | null;
   /** Lower-cased haystack, computed once so filtering never re-builds it. */
   search: string;
 }
@@ -79,7 +80,7 @@ export function normalizeResume(value: unknown): Resume {
       return {
         kind: string(entry.kind), title: string(entry.title), organization: string(entry.organization),
         start: string(entry.start), end: string(entry.end), months: maybeNumber(entry.months),
-        technologies: strings(entry.technologies),
+        months_ago: maybeNumber(entry.months_ago), technologies: strings(entry.technologies),
       };
     }) : [],
     total_experience_months: number(data.total_experience_months),
@@ -132,6 +133,7 @@ export function normalizeRanking(value: unknown): Ranking {
         must_have_coverage: maybeNumber(job.must_have_coverage),
         must_have_count: maybeNumber(job.must_have_count),
         retrieval_score: maybeNumber(job.retrieval_score),
+        recency_alignment: maybeNumber(job.recency_alignment),
         search: `${title} ${company} ${location} ${matched.join(" ")}`.toLowerCase(),
       };
     }),
