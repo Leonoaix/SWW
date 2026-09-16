@@ -19,7 +19,6 @@ from .. import config
 from ..embedding import available as embedding_available, load_embedder
 from ..rerank import available as rerank_available, load_reranker
 from ..jobs.crawler import WaterlooWorksCrawler, validation_message
-from ..jobs.parser import JOBS_URL, is_placeholder
 from ..llm import DeepSeekClient, DeepSeekError, Extractor, load_api_key, model_name
 from ..match import filters
 from ..match.pipeline import SemanticRanker, rank_local
@@ -228,21 +227,25 @@ def create_app(data_dir: Optional[Path] = None, crawler=None, ai_factory=None,
         if not getattr(browser, "is_open", False):
             raise HTTPException(409, "登录浏览器未打开。请先点「打开登录浏览器」。")
         url = job.get("url") or ""
-        # A posting that only opens from a modal has no address of its own, so
-        # the most that can be done is put the board in front of the user with
-        # the id to search for. Saying that beats opening the board and calling
-        # it the posting, which is what the apply button used to do.
-        searchable = is_placeholder(url)
+        # Postings without an address of their own are opened the way the
+        # crawler opens them: find the row on the board and click it. Walking
+        # pages costs requests, so this runs under the same rate limit.
         async with state["browser_lock"]:
             try:
-                destination = await browser.open_posting(JOBS_URL if searchable else url)
+                result = await browser.open_posting(url, job_id=job_id)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from None
+            except LookupError:
+                raise HTTPException(
+                    404, f"在当前看板上没有找到编号 {job_id} 的职位。它可能已下架，"
+                         "或被你在浏览器里的筛选条件挡住了。") from None
             except Exception as exc:
-                raise HTTPException(503, "无法在登录浏览器中打开。") from exc
+                raise HTTPException(503, "无法在登录浏览器中打开该职位。") from exc
+        dialog = result.get("opened") == "dialog"
         return {
-            "url": destination, "job_id": job_id, "needs_search": searchable,
-            "message": (f"该职位没有独立网址，已打开职位看板，请搜索编号 {job_id}。" if searchable
+            "job_id": job_id, "url": result.get("url", ""), "opened": result.get("opened"),
+            "pages_searched": result.get("pages_searched", 0),
+            "message": ("已在登录浏览器的看板上打开该职位的详情弹窗。" if dialog
                         else "已在登录浏览器中打开该职位。")
                        + "本工具不会替你提交申请。",
         }

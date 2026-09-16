@@ -123,3 +123,66 @@ def test_upload_import_ai_evidence_and_csv(tmp_path, width, extension, mime, bui
         assert not errors
         page.screenshot(path=str(tmp_path / f"ai-results-{width}.png"), full_page=True)
         browser.close()
+
+
+@pytest.mark.skipif(not (ROOT / "frontend/dist/waterlooworks.html").exists(), reason="Build frontend to run browser integration")
+def test_a_posting_with_no_address_asks_the_service_instead_of_linking(tmp_path):
+    """The bug this guards, reported twice: most postings have no address of
+    their own, and `jobs.htm#job-<id>` is a valid WaterlooWorks URL that lands
+    on the board. A link is therefore the wrong affordance — the detail view is
+    a dialog, so the service has to click the row in the logged-in browser."""
+    from test_api import OpenableCrawler
+    from sww.jobs.parser import placeholder_url
+
+    crawler = OpenableCrawler(on_board=("2",))
+    app = create_app(tmp_path, crawler, embedder=None, reranker=None)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as http, sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, channel=os.environ.get("SWW_TEST_BROWSER_CHANNEL") or None)
+        context = browser.new_context(viewport={"width": 1440, "height": 1000})
+
+        def route_local(route):
+            request = route.request
+            url = urlsplit(request.url)
+            if url.hostname != "127.0.0.1":
+                route.abort()
+                return
+            response = http.request(request.method, url.path, headers=request.all_headers(),
+                                    content=request.post_data_buffer)
+            headers = {key: value for key, value in response.headers.items()
+                       if key not in {"content-length", "content-encoding", "transfer-encoding"}}
+            route.fulfill(status=response.status_code, headers=headers, body=response.content)
+
+        context.route("**/*", route_local)
+        page = context.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto("http://127.0.0.1:8765/waterlooworks")
+        page.wait_for_timeout(200)
+        assert errors == []
+
+        page.locator("#resume-file").set_input_files(
+            {"name": "synthetic.md", "mimeType": "text/markdown", "buffer": ("# Resume\n\n" + RESUME).encode()})
+        page.locator("#upload-button").click()
+        expect(page.locator("#resume-summary")).not_to_be_hidden()
+        page.locator(".import-details summary").click()
+        posting = {**job("2", "Backend Intern", "Develop reliable event-driven services."),
+                   "url": placeholder_url("2")}
+        page.locator("#jobs-file").set_input_files(
+            {"name": "jobs.json", "mimeType": "application/json",
+             "buffer": json.dumps({"jobs": [posting]}).encode()})
+        page.locator("#import-button").click()
+        expect(page.locator("#total-count")).to_have_text("1")
+        page.locator("#ranking-engine").select_option("local")
+        page.locator("#rank-button").click()
+        expect(page.locator(".job-result")).to_have_count(1)
+
+        actions = page.locator(".job-result .job-actions")
+        expect(actions.locator("a")).to_have_count(0)          # never a link to the board
+        apply_button = actions.locator("button").first
+        expect(apply_button).to_have_text("去申请 ↗")
+        apply_button.click()
+        expect(page.locator(".job-applied-state")).to_have_text("已打开过申请页")
+        assert crawler.clicked == ["2"]                        # the row, not a navigation
+        assert crawler.opened == []
+        assert not errors
+        browser.close()

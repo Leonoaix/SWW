@@ -9,7 +9,7 @@ import os
 import pytest
 
 from sww.jobs.crawler import WaterlooWorksCrawler
-from sww.jobs.parser import JOBS_URL
+from sww.jobs.parser import JOBS_URL, parse_detail, placeholder_url
 
 
 HTML = '''<!doctype html><html><head><title>Fixture</title></head><body>
@@ -529,3 +529,138 @@ async def test_polling_starts_tight_and_backs_off_within_its_budget():
     assert all(w <= 0.4 for w in waits)                # capped
     assert abs(sum(waits) - 2.0) < 1e-6                # exactly the budget
     assert len(waits) > 8                              # many more checks than the old 0.25s
+
+
+MULTIPAGE = '''<!doctype html><html><head><title>Fixture</title></head><body>
+<button aria-pressed="true">My Program</button>
+<main id="board"></main><div id="modal"></div>
+<script>
+const PAGES = 3, PER = 2;
+function showPage(n) {
+ let rows = '';
+ for (let i = 0; i < PER; i++) {
+   const id = String(485670 + (n-1)*PER + i);
+   rows += `<tr><td><input name="dataViewerSelection" value="${id}"></td>
+     <td><a class="overflow--ellipsis" href="#" onclick="showDetail('${id}'); return false">Engineer ${id}</a></td>
+     <td>Example</td><td>Waterloo</td></tr>`;
+ }
+ let pager = '';
+ for (let p = 1; p <= PAGES; p++)
+   pager += `<a class="pagination__link ${p===n?'active':''}" href="#" onclick="showPage(${p}); return false">${p}</a>`;
+ pager += `<a class="pagination__link ${n===PAGES?'disabled':''}" href="#" onclick="showPage(${Math.min(n+1,PAGES)}); return false">Next</a>`;
+ document.querySelector('#board').innerHTML =
+   `<p>${PER*PAGES} results</p><table><thead><tr><th></th><th>Job Title</th><th>Organization</th><th>City</th></tr></thead><tbody>${rows}</tbody></table>` + pager;
+}
+function showDetail(id) {
+ document.querySelector('#modal').innerHTML = `<div class="modal is--visible"><h2>Posting ${id}</h2>
+  <div class="is--long-form-reading"><table><tr><td>Job Summary:</td><td>Develop Python services for job ${id}</td></tr>
+  <tr><td>Required Skills:</td><td>Python and SQL</td></tr></table></div></div>`;
+}
+document.addEventListener('keydown', e => { if(e.key === 'Escape') document.querySelector('#modal').innerHTML = ''; });
+showPage(1);
+</script></body></html>'''
+
+
+async def board(tmp_path, html=MULTIPAGE):
+    """A logged-in browser sitting on a synthetic board."""
+    crawler = WaterlooWorksCrawler(tmp_path)
+    await crawler.open_browser()
+    await crawler._context.route("**/*", lambda route: route.fulfill(
+        status=200, content_type="text/html", body=html))
+    await crawler._page.goto(JOBS_URL, wait_until="domcontentloaded")
+
+    async def fast_settle(seconds):
+        crawler._check_stop()
+        await asyncio.sleep(min(seconds, 0.001))
+        crawler._check_stop()
+
+    crawler._settle = fast_settle
+    crawler._throttle = lambda: asyncio.sleep(0)
+    return crawler
+
+
+async def test_a_posting_with_no_address_is_opened_by_clicking_its_row(tmp_path):
+    """The posting the user reported: no URL of its own, detail is a dialog.
+
+    `jobs.htm#job-485670` navigates to the board, not the posting, so the only
+    way to reach it is the way the crawler does — find the row and click it.
+    """
+    crawler = await board(tmp_path)
+    try:
+        result = await crawler.open_posting(placeholder_url("485670"), job_id="485670")
+        assert result["opened"] == "dialog"
+        assert parse_detail(await crawler._page.content(), "485670")
+    finally:
+        await crawler.close()
+
+
+async def test_the_posting_is_found_on_a_later_page(tmp_path):
+    """Rows are located by their dataViewerSelection value, which identifies
+    the posting by content and so survives pagination — unlike the positional
+    selectors a listing parse produces for one particular DOM."""
+    crawler = await board(tmp_path)
+    try:
+        result = await crawler.open_posting(placeholder_url("485675"), job_id="485675")
+        assert result["opened"] == "dialog"
+        assert parse_detail(await crawler._page.content(), "485675")
+    finally:
+        await crawler.close()
+
+
+async def test_a_posting_absent_from_the_board_reports_that_clearly(tmp_path):
+    crawler = await board(tmp_path)
+    try:
+        with pytest.raises(LookupError, match="999999"):
+            await crawler.open_posting(placeholder_url("999999"), job_id="999999")
+    finally:
+        await crawler.close()
+
+
+async def test_a_posting_with_a_real_address_skips_the_board_walk(tmp_path):
+    crawler = await board(tmp_path)
+    try:
+        real = JOBS_URL + "?action=display&jobId=485670"
+        result = await crawler.open_posting(real, job_id="485670")
+        assert result["opened"] == "page"
+        assert result["pages_searched"] == 0
+    finally:
+        await crawler.close()
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.test/apply",
+    "https://waterlooworks.uwaterloo.ca.evil.test/myAccount/co-op/full/jobs.htm?jobId=1",
+    "javascript:alert(1)",
+])
+async def test_a_url_that_is_not_a_posting_is_refused_rather_than_searched(tmp_path, url):
+    """A stored URL that is present but foreign means the data is wrong. Say so
+    instead of quietly doing something else, which would hide the corruption."""
+    crawler = await board(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="WaterlooWorks"):
+            await crawler.open_posting(url, job_id="485670")
+    finally:
+        await crawler.close()
+
+
+async def test_a_bare_board_address_falls_back_to_the_board_walk(tmp_path):
+    """JOBS_URL with nothing after it names no posting, so following it lands
+    on the wrong page exactly as the stand-in did."""
+    crawler = await board(tmp_path)
+    try:
+        result = await crawler.open_posting(JOBS_URL, job_id="485670")
+        assert result["opened"] == "dialog"
+        assert parse_detail(await crawler._page.content(), "485670")
+    finally:
+        await crawler.close()
+
+
+@pytest.mark.parametrize("job_id", ["", "abc", "1; DROP TABLE", "485670']"])
+async def test_only_a_numeric_id_may_reach_the_row_selector(tmp_path, job_id):
+    """The id is interpolated into a CSS selector, so it is validated first."""
+    crawler = await board(tmp_path)
+    try:
+        with pytest.raises(ValueError):
+            await crawler.open_posting(placeholder_url("1"), job_id=job_id)
+    finally:
+        await crawler.close()

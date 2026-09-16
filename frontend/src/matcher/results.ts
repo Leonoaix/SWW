@@ -116,46 +116,61 @@ function applyAction(job: RankedJob): HTMLElement {
   const url = safeJobUrl(job.url);
   const addressable = url !== null && !isPlaceholderUrl(url);
   const state = element("span", "job-applied-state");
-  const refresh = () => {
-    state.textContent = hasOpened(job.id) ? "已打开过申请页" : "";
-    state.hidden = !hasOpened(job.id);
+  const refresh = (note = "") => {
+    state.textContent = note || (hasOpened(job.id) ? "已打开过申请页" : "");
+    state.hidden = !state.textContent;
   };
 
-  if (!url) {
-    row.append(element("span", "field-hint",
-      `未获得职位链接，请在 WaterlooWorks 内按编号 ${job.id || "（未知）"} 搜索。`));
+  if (!addressable && !job.id) {
+    row.append(element("span", "field-hint", "未获得职位链接，也没有编号，无法定位该职位。"));
     return row;
   }
 
-  // A posting with no address of its own: open the board and say what to look
-  // for, rather than linking somewhere that is not the posting.
-  const label = addressable ? "去申请 ↗" : "打开看板 ↗";
-  const link = externalLink(url, label, "btn btn-primary btn-sm");
-  link.addEventListener("click", event => {
+  const ask = (control: HTMLElement) => {
     markOpened(job.id);
-    refresh();
-    if (!loginBrowserOpen) return;          // plain link: let the browser navigate
-    event.preventDefault();
-    link.setAttribute("aria-busy", "true");
+    control.setAttribute("aria-busy", "true");
+    refresh("正在登录浏览器中打开…");
     void post(`/jobs/${encodeURIComponent(job.id)}/open`)
-      .catch(() => { window.open(url, "_blank", "noopener"); })
-      .finally(() => link.removeAttribute("aria-busy"));
-  });
-  row.append(link);
+      .then(() => refresh())
+      .catch((error: Error) => refresh(error.message))
+      .finally(() => control.removeAttribute("aria-busy"));
+  };
 
-  if (!addressable && job.id) {
-    const hint = element("span", "field-hint", `此职位无独立网址，请在看板搜索编号 ${job.id}`);
-    const copy = element("button", "btn btn-ghost btn-sm", "复制编号");
-    copy.type = "button";
-    copy.addEventListener("click", () => {
-      void navigator.clipboard?.writeText(job.id)
-        .then(() => { copy.textContent = "已复制"; })
-        .catch(() => { copy.textContent = job.id; });
+  if (addressable) {
+    const link = externalLink(url as string, "去申请 ↗", "btn btn-primary btn-sm");
+    link.addEventListener("click", event => {
+      if (!loginBrowserOpen) { markOpened(job.id); refresh(); return; }
+      event.preventDefault();          // the logged-in browser already has the session
+      ask(link);
     });
-    row.append(hint, copy);
+    row.append(link);
+    row.append(state);
+    refresh();
+    return row;
   }
 
-  row.append(state);
+  // Most postings have no address: the board opens their detail as a dialog
+  // from an onclick handler. A link would land on the board instead, so this
+  // asks the service to do what the crawler does — find the row and click it.
+  const button = element("button", "btn btn-primary btn-sm", "去申请 ↗");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    if (!loginBrowserOpen) {
+      refresh("此职位的详情是看板上的弹窗，请先点「打开登录浏览器」。");
+      return;
+    }
+    ask(button);
+  });
+
+  // Keep the manual route open: the id is what the board's search box takes.
+  const copy = element("button", "btn btn-ghost btn-sm", "复制编号");
+  copy.type = "button";
+  copy.addEventListener("click", () => {
+    void navigator.clipboard?.writeText(job.id)
+      .then(() => { copy.textContent = "已复制"; })
+      .catch(() => { copy.textContent = job.id; });
+  });
+  row.append(button, copy, state);
   refresh();
   return row;
 }

@@ -261,20 +261,35 @@ def test_the_resume_summary_carries_the_dates_recency_is_scored_from(local):
 
 
 class OpenableCrawler(FakeCrawler):
-    """A login browser that records what it was asked to show."""
+    """A login browser that records what it was asked to show.
 
-    def __init__(self, is_open=True):
+    It mirrors the real crawler's three cases: a posting with an address of its
+    own is navigated to, a posting without one is found on the board and
+    clicked, and anything that is not a WaterlooWorks posting is refused.
+    """
+
+    def __init__(self, is_open=True, on_board=("123",)):
         super().__init__()
         self.is_open = is_open
-        self.opened = []
+        self.opened = []        # addresses navigated to
+        self.clicked = []       # postings opened by clicking their board row
+        self.on_board = set(on_board)
 
-    async def open_posting(self, url):
-        from sww.jobs.parser import safe_job_url
-        destination = safe_job_url(url)
-        if destination is None:
-            raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
-        self.opened.append(destination)
-        return destination
+    async def open_posting(self, url, job_id="", max_pages=60):
+        from sww.jobs.parser import JOBS_URL, is_placeholder, safe_job_url
+        if url and not is_placeholder(url):
+            destination = safe_job_url(url)
+            if destination is None:
+                raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
+            if "?" in destination:
+                self.opened.append(destination)
+                return {"opened": "page", "url": destination, "pages_searched": 0}
+        if not job_id.isdigit():
+            raise ValueError("Opening a posting without its own address needs its numeric id.")
+        if job_id not in self.on_board:
+            raise LookupError(f"Posting {job_id} was not found on the current board.")
+        self.clicked.append(job_id)
+        return {"opened": "dialog", "url": JOBS_URL, "pages_searched": 1}
 
 
 def app_with_browser(tmp_path, crawler):
@@ -329,23 +344,36 @@ def test_apply_never_submits_an_application(tmp_path):
         seed_jobs(app, [job("123")])
         client.post("/matcher-api/jobs/123/open")
     # The only interaction is a navigation to the read-only posting URL.
+    assert crawler.opened and crawler.clicked == []
     assert all(url.startswith("https://waterlooworks.uwaterloo.ca/") for url in crawler.opened)
     assert not hasattr(crawler, "submitted")
 
 
-def test_a_posting_with_no_address_opens_the_board_and_says_what_to_search(tmp_path):
+def test_a_posting_with_no_address_is_opened_by_clicking_its_board_row(tmp_path):
     """The bug this guards: `jobs.htm#job-123` is a valid WaterlooWorks URL
-    that lands on the board, so presenting it as an apply link sent people to
-    the wrong page."""
-    from sww.jobs.parser import JOBS_URL, placeholder_url
+    that lands on the board, so following it sent people to the wrong page.
+    The detail view is a dialog, so the only way in is to click the row."""
+    from sww.jobs.parser import placeholder_url
     crawler = OpenableCrawler()
     app = app_with_browser(tmp_path, crawler)
     with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
         app.state.store.replace_jobs([{**job("123"), "url": placeholder_url("123")}])
         body = client.post("/matcher-api/jobs/123/open").json()
-        assert body["needs_search"] is True
-        assert "123" in body["message"]
-        assert crawler.opened == [JOBS_URL]        # the board, not a fake posting
+        assert body["opened"] == "dialog"
+        assert crawler.clicked == ["123"]
+        assert crawler.opened == []                # never navigated to the board
+
+
+def test_a_posting_missing_from_the_board_says_so_rather_than_opening_the_board(tmp_path):
+    from sww.jobs.parser import placeholder_url
+    crawler = OpenableCrawler(on_board=())
+    app = app_with_browser(tmp_path, crawler)
+    with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
+        app.state.store.replace_jobs([{**job("123"), "url": placeholder_url("123")}])
+        response = client.post("/matcher-api/jobs/123/open")
+        assert response.status_code == 404
+        assert "123" in response.json()["detail"]
+        assert crawler.opened == []
 
 
 def test_a_posting_with_a_real_address_opens_that_address(tmp_path):
@@ -355,5 +383,6 @@ def test_a_posting_with_a_real_address_opens_that_address(tmp_path):
     with TestClient(app, base_url="http://127.0.0.1:8765", headers={"X-SWW-Client": "1"}) as client:
         app.state.store.replace_jobs([{**job("654321"), "url": real}])
         body = client.post("/matcher-api/jobs/654321/open").json()
-        assert body["needs_search"] is False
+        assert body["opened"] == "page"
         assert crawler.opened == [real]
+        assert crawler.clicked == []

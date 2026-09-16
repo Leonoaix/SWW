@@ -22,8 +22,8 @@ from pydantic import ValidationError
 from ..store import detail_is_fresh
 
 from .parser import (
-    DASHBOARD_URL, JOBS_URL, ORIGIN, Listing, Target, login_required, parse_detail,
-    parse_listing, safe_job_url,
+    DASHBOARD_URL, JOBS_URL, ORIGIN, Listing, Target, is_placeholder, login_required,
+    parse_detail, parse_listing, safe_job_url,
 )
 
 Progress = Callable[[dict], Awaitable[None]]
@@ -104,6 +104,7 @@ class WaterlooWorksCrawler:
         # floor we promise to respect; this is what happens when the board
         # tells us, by getting slow or erroring, that it wants more room.
         self._penalty = 1.0
+        self._seen_pages: set = set()
 
     async def _program_control(self):
         """Read the visible My Program toggle, including its material icon.
@@ -156,27 +157,81 @@ class WaterlooWorksCrawler:
         """Whether the dedicated login browser is up and usable."""
         return self._context is not None
 
-    async def open_posting(self, url: str) -> str:
-        """Show one posting in the already-logged-in browser, in a new tab.
+    async def open_posting(self, url: str, job_id: str = "",
+                           max_pages: int = 60) -> dict:
+        """Bring one posting up in the already-logged-in browser.
 
-        A new tab rather than the current one: the listing page holds the
-        user's filters and, during a crawl, the crawler's place in them.
+        Most postings have no address: the board opens them as a dialog from an
+        onclick handler, and `jobs.htm#job-<id>` is only a stand-in. So when
+        there is no real URL this does what the crawler does — find the row on
+        the board and click its title — rather than navigating somewhere that
+        is not the posting.
 
-        This opens the application page. It does not apply. Submitting on
-        someone's behalf would pick a resume package, skip employer questions
-        and be irreversible — and bulk automated applying is exactly what gets
-        a student's account flagged. The same reason `_close_modal` refuses to
-        touch an Apply button.
+        The row is found by its `dataViewerSelection` value, which identifies
+        the posting by content and therefore survives across pages, unlike the
+        positional selectors a listing parse produces for one specific DOM.
+
+        This opens the application page. It never applies: choosing a resume
+        package and answering an employer's questions is not something to
+        automate on someone's behalf, and it cannot be undone.
         """
-        destination = safe_job_url(url)
-        if destination is None:
-            raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
         if self._context is None:
             raise RuntimeError("The login browser is not open.")
-        page = await self._context.new_page()
-        await page.goto(destination, wait_until="domcontentloaded", timeout=45000)
-        await page.bring_to_front()
-        return destination
+
+        # Test the raw string: `safe_job_url` drops the fragment, which is the
+        # only thing telling the stand-in apart from the board itself.
+        if url and not is_placeholder(url):
+            destination = safe_job_url(url)
+            if destination is None:
+                raise ValueError("Refused a job URL that is not a read-only WaterlooWorks posting.")
+            # A bare board address names no posting, so navigating to it lands
+            # on the wrong page just as the stand-in did. Search instead.
+            if "?" in destination:
+                page = await self._context.new_page()
+                await self._goto(page, destination)
+                await page.bring_to_front()
+                return {"opened": "page", "url": destination, "pages_searched": 0}
+
+        if not re.fullmatch(r"\d{1,12}", job_id or ""):
+            raise ValueError("Opening a posting without its own address needs its numeric id.")
+        return await self._open_from_board(job_id, max_pages)
+
+    async def _open_from_board(self, job_id: str, max_pages: int) -> dict:
+        """Walk the board to the posting and click it open."""
+        row = f'tr:has(input[name="dataViewerSelection"][value="{job_id}"])'
+        await self._close_modal()
+        if not safe_job_url(self._page.url):
+            await self._goto(self._page, JOBS_URL)
+        await self._ensure_my_program()
+        listing = await self._wait_listing()
+
+        for _ in range(max(1, max_pages)):
+            if await self._page.locator(row).count():
+                title = self._page.locator(f"{row} a.overflow--ellipsis")
+                if not await title.count():
+                    title = self._page.locator(f"{row} a").first
+                await self._throttle()
+                await title.first.click()
+                await self._await_dialog(job_id)
+                await self._page.bring_to_front()
+                return {"opened": "dialog", "url": self._page.url,
+                        "pages_searched": len(self._seen_pages)}
+            if listing.next_page is None:
+                break
+            previous = tuple(job["id"] for job in listing.jobs)
+            self._seen_pages.add(previous)
+            listing = await self._navigate(listing.next_page, previous)
+        raise LookupError(f"Posting {job_id} was not found on the current board.")
+
+    async def _await_dialog(self, job_id: str) -> None:
+        """Wait for the posting's own dialog, not merely for any dialog."""
+        for wait in self._poll_intervals(budget=20.0):
+            html = await self._content()
+            if parse_detail(html, job_id):
+                return
+            await self._settle(wait)
+        # The dialog may be open but unparseable; that is still what the user
+        # asked for, so do not close it or claim failure.
 
     async def open_browser(self) -> None:
         """Open a dedicated persistent profile for the user's manual login.
