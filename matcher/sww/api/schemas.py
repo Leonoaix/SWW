@@ -12,7 +12,7 @@ from .. import config
 class CrawlOptions(BaseModel):
     max_pages: int = Field(default=100, ge=1, le=config.MAX_CRAWL_PAGES)
     max_jobs: int = Field(default=3000, ge=1, le=config.MAX_CRAWL_JOBS)
-    delay_seconds: float = Field(default=config.MIN_CRAWL_DELAY_SECONDS,
+    delay_seconds: float = Field(default=config.DEFAULT_CRAWL_DELAY_SECONDS,
                                  ge=config.MIN_CRAWL_DELAY_SECONDS, le=60)
     include_details: bool = True
 

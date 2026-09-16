@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import random
+import time
 import os
 import re
 from copy import deepcopy
@@ -20,11 +22,23 @@ from pydantic import ValidationError
 from ..store import detail_is_fresh
 
 from .parser import (
-    DASHBOARD_URL, JOBS_URL, Listing, Target, login_required, parse_detail,
+    DASHBOARD_URL, JOBS_URL, ORIGIN, Listing, Target, login_required, parse_detail,
     parse_listing, safe_job_url,
 )
 
 Progress = Callable[[dict], Awaitable[None]]
+
+# Only navigations and data calls count against the rate limit; images, CSS and
+# fonts are the browser filling out a page we already asked for.
+TRACKED_RESOURCES = frozenset({"document", "xhr", "fetch"})
+# Above this, the board is taken to be struggling and the interval widens.
+SLOW_RESPONSE_SECONDS = 5.0
+MAX_PENALTY = 8.0
+# The hard floor and the default. Neither is a measured WaterlooWorks limit —
+# no such number is published — so the default stays well under one request a
+# second and the backoff above does the adapting.
+MIN_DELAY_SECONDS = 0.5
+DEFAULT_DELAY_SECONDS = 1.0
 
 # Last listing parse, reused while a page settles. One entry: the poll loop
 # only ever asks about the page it is currently waiting on.
@@ -80,7 +94,16 @@ class WaterlooWorksCrawler:
         self._busy = False
         self._rate_limited = False
         self._cancel = asyncio.Event()
-        self._delay = 2.0
+        self._delay = DEFAULT_DELAY_SECONDS
+        # When the site was last asked for anything. The throttle is a rate
+        # limit measured from here, not a fixed sleep before each action.
+        self._last_request = 0.0
+        self._request_count = 0
+        self._pending_since = 0.0
+        # Multiplier the site can raise on us. The configured interval is a
+        # floor we promise to respect; this is what happens when the board
+        # tells us, by getting slow or erroring, that it wants more room.
+        self._penalty = 1.0
 
     async def _program_control(self):
         """Read the visible My Program toggle, including its material icon.
@@ -113,19 +136,19 @@ class WaterlooWorksCrawler:
 
     async def _ensure_my_program(self) -> None:
         clicked = False
-        for _ in range(60):
+        for wait in self._poll_intervals():
             await self._content()
             control, enabled = await self._program_control()
             if enabled is True:
                 return
             if enabled is False and not clicked:
-                await self._pause()
+                await self._throttle()
                 await control.click()
                 clicked = True
                 # Let the filter request replace the previous rows/empty state.
-                await self._pause()
+                await self._throttle()
             else:
-                await self._pause(0.25)
+                await self._settle(wait)
         raise CrawlStopped("failed", "未能确认 My Program 已开启。请在采集浏览器进入 Co-op 职位列表，打开 My Program（toggle_on），再重试；入口页的空结果不会算作采集完成。")
 
     async def open_browser(self) -> None:
@@ -166,6 +189,7 @@ class WaterlooWorksCrawler:
                 if channel or "executable doesn't exist" not in str(exc).lower():
                     raise
                 self._context = await self._playwright.chromium.launch_persistent_context(**launch_options, channel="chrome")
+            self._context.on("request", self._on_request)
             self._context.on("response", self._on_response)
             self._context.set_default_timeout(15000)
             self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
@@ -174,9 +198,39 @@ class WaterlooWorksCrawler:
             await self.close()
             raise RuntimeError("Unable to open the crawler browser. Run: python -m playwright install chromium; then retry. Close another matcher browser using the same profile if necessary.") from None
 
+    def _on_request(self, request) -> None:
+        if request.url.startswith(ORIGIN) and request.resource_type in TRACKED_RESOURCES:
+            self._last_request = self._pending_since = time.monotonic()
+            self._request_count += 1
+
     def _on_response(self, response) -> None:
-        if response.status == 429 and response.url.startswith("https://waterlooworks.uwaterloo.ca/"):
+        """Watch how the board is holding up and widen the interval if it isn't.
+
+        A rising response time is the warning that comes *before* a 429. Backing
+        off on it means the crawl slows itself down while the site is under
+        load, instead of discovering the limit by hitting it.
+        """
+        if not response.url.startswith(ORIGIN):
+            return
+        # Count the reply too: a slow response means the site was busy with us
+        # for that whole time, which the next interval should respect.
+        self._last_request = time.monotonic()
+        if response.status == 429:
             self._rate_limited = True
+            return
+        if response.status >= 500:
+            self._penalty = min(MAX_PENALTY, self._penalty * 2)
+            return
+        if not self._pending_since:
+            return
+        latency = self._last_request - self._pending_since
+        self._pending_since = 0.0
+        if latency > SLOW_RESPONSE_SECONDS:
+            self._penalty = min(MAX_PENALTY, self._penalty * 1.5)
+        elif latency < SLOW_RESPONSE_SECONDS / 2:
+            # Recover slowly. Backing off fast and returning slowly is the
+            # right asymmetry when the cost of being wrong is someone's account.
+            self._penalty = max(1.0, self._penalty * 0.9)
 
     async def close(self) -> None:
         context, playwright = self._context, self._playwright
@@ -194,13 +248,52 @@ class WaterlooWorksCrawler:
         if self._rate_limited:
             raise CrawlStopped("failed", "WaterlooWorks returned HTTP 429. Crawl stopped; wait before retrying.")
 
+    async def _settle(self, seconds: float) -> None:
+        """Wait locally, and stop waiting the moment a cancel arrives."""
+        self._check_stop()
+        if seconds > 0:
+            try:
+                await asyncio.wait_for(self._cancel.wait(), timeout=seconds)
+            except asyncio.TimeoutError:
+                pass
+        self._check_stop()
+
+    async def _throttle(self) -> None:
+        """Hold the request rate to at most one every `delay` seconds.
+
+        This used to be a flat sleep before every action, which charged the
+        delay *on top of* however long the previous page load took: a two second
+        interval plus a two second detail load meant one request every four
+        seconds, not every two. Measuring from the last request instead means
+        the interval is what the site actually experiences, so the crawl is
+        faster while asking for no more than it did before — and slower
+        responses automatically widen the gap rather than narrowing it.
+        """
+        interval = self._delay * self._penalty
+        remaining = interval - (time.monotonic() - self._last_request)
+        if remaining <= 0:
+            return
+        # A little jitter: a perfectly constant interval is both more obviously
+        # robotic and more likely to land in step with a fixed rate window.
+        await self._settle(min(remaining * random.uniform(0.85, 1.15), interval))
+
     async def _pause(self, seconds: Optional[float] = None) -> None:
-        self._check_stop()
-        try:
-            await asyncio.wait_for(self._cancel.wait(), timeout=self._delay if seconds is None else seconds)
-        except asyncio.TimeoutError:
-            pass
-        self._check_stop()
+        """Backwards-compatible shim: no argument throttles, a number waits."""
+        await (self._throttle() if seconds is None else self._settle(seconds))
+
+    def _poll_intervals(self, budget: float = 15.0, start: float = 0.05, cap: float = 0.4):
+        """Poll waits that start tight and back off, within a total budget.
+
+        Polling reads the page over the debug protocol and never touches
+        WaterlooWorks, so the old fixed 250ms granularity bought nothing and
+        cost up to a quarter second after the content was already there.
+        """
+        spent, wait = 0.0, start
+        while spent < budget:
+            step = min(wait, budget - spent)
+            yield step
+            spent += step
+            wait = min(cap, wait * 1.6)
 
     @staticmethod
     def _parse_listing(html: str, url: str) -> Listing:
@@ -273,14 +366,14 @@ class WaterlooWorksCrawler:
         stable, prior = 0, None
         fingerprint = None
         first = True
-        for _ in range(60):
+        for wait in self._poll_intervals():
             # Ask the page for a few numbers before pulling and parsing its
             # whole DOM: while the fingerprint is still moving the page is
             # mid-update and any parse of it would be thrown away.
             current = await self._signature()
             if not first and current and current != fingerprint:
                 fingerprint = current
-                await self._pause(0.25)
+                await self._settle(wait)
                 continue
             fingerprint, first = current, False
             last = self._parse_listing(await self._content(), self._page.url)
@@ -295,13 +388,13 @@ class WaterlooWorksCrawler:
                 if enabled is not True:
                     raise CrawlStopped("failed", "My Program 筛选已关闭或无法确认，已停止采集，避免混入其他专业的岗位。")
                 return last
-            await self._pause(0.25)
+            await self._settle(wait)
         if previous_ids is not None:
             raise CrawlStopped("failed", "Pagination did not produce a new result page. Partial results were retained.")
         raise CrawlStopped("failed", "No recognizable job results appeared. Open the Full-Cycle board and use table view; the live page layout may require a parser update.")
 
     async def _navigate(self, target: Target, previous_ids: Optional[tuple] = None) -> Listing:
-        await self._pause()
+        await self._throttle()
         # Click the real control: navigating its href can discard JS filters.
         await self._page.locator(target.selector).click()
         return await self._wait_listing(previous_ids)
@@ -342,10 +435,10 @@ class WaterlooWorksCrawler:
         modal = self._page.locator(".modal.is--visible:visible, [role='dialog']:visible")
         if await modal.count():
             await self._page.keyboard.press("Escape")
-            for _ in range(20):
+            for wait in self._poll_intervals(budget=3.0):
                 if not await modal.count():
                     return
-                await self._pause(0.15)
+                await self._settle(wait)
             # Recognized close controls only; never click Apply or form submit.
             close = modal.locator("button[aria-label='Close'], button.modal__close, .modal__close, button[data-dismiss='modal']")
             if await close.count() == 1:
@@ -355,20 +448,20 @@ class WaterlooWorksCrawler:
             raise CrawlStopped("failed", "The job preview did not close; close it manually before retrying.")
 
     async def _read_detail(self, target: Target, job_id: str) -> Optional[dict]:
-        await self._pause()
+        await self._throttle()
         detail_page = None
         before_pages = set(self._context.pages)
         before_url = self._page.url
         before_ids = tuple(job["id"] for job in self._parse_listing(await self._content(), before_url).jobs)
         try:
             await self._page.locator(target.selector).click()
-            for _ in range(60):
+            for wait in self._poll_intervals():
                 if detail_page is None:
                     popups = [p for p in self._context.pages if p not in before_pages]
                     if popups:
                         detail_page = popups[0]
                         if detail_page.url == "about:blank":
-                            await self._pause(0.25)
+                            await self._settle(wait)
                             continue
                         if safe_job_url(detail_page.url) is None:
                             raise CrawlStopped("failed", "Posting opened an unrecognized destination; crawl stopped.")
@@ -376,7 +469,7 @@ class WaterlooWorksCrawler:
                 detail = parse_detail(html, job_id)
                 if detail:
                     return detail
-                await self._pause(0.25)
+                await self._settle(wait)
             return None
         finally:
             for popup in list(self._context.pages):
@@ -388,7 +481,7 @@ class WaterlooWorksCrawler:
                 # Return through browser history so the filtered list survives.
                 current = self._parse_listing(await self._content(), self._page.url)
                 if self._page.url != before_url or not current.jobs:
-                    await self._pause()
+                    await self._throttle()
                     await self._page.go_back(wait_until="domcontentloaded", timeout=45000)
                 restored = await self._wait_listing()
                 if tuple(job["id"] for job in restored.jobs) != before_ids:
@@ -441,11 +534,12 @@ class WaterlooWorksCrawler:
             raise RuntimeError("A crawl is already running.")
         if not 1 <= max_pages <= 1000 or not 1 <= max_jobs <= 20000:
             raise ValueError("max_pages must be 1–1000 and max_jobs must be 1–20000.")
+        self._penalty = 1.0
         if not math.isfinite(float(delay_seconds)):
             raise ValueError("delay_seconds must be finite.")
         self._busy = True
         self._cancel = cancel if cancel is not None else asyncio.Event()
-        self._delay = max(2.0, float(delay_seconds))
+        self._delay = max(MIN_DELAY_SECONDS, float(delay_seconds))
         self._rate_limited = False
         jobs, snapshots, warnings, errors = {}, [], [], []
         list_complete = False

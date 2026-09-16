@@ -213,7 +213,7 @@ $("crawl-button").addEventListener("click", () => void perform("crawl-button", "
   const pages = Number($<HTMLInputElement>("max-pages").value);
   const delay = Number($<HTMLInputElement>("crawl-delay").value);
   if (!Number.isInteger(pages) || pages < 1 || pages > 500) throw new Error("抓取页数须为 1 至 500 的整数。");
-  if (!Number.isFinite(delay) || delay < 2 || delay > 30) throw new Error("请求间隔须为 2 至 30 秒。");
+  if (!Number.isFinite(delay) || delay < 0.5 || delay > 30) throw new Error("请求间隔须为 0.5 至 30 秒。");
   const result = object(await post("/crawl",
     { max_pages: pages, max_jobs: 3000, delay_seconds: delay, include_details: true }));
   clearRanking("正在收集职位。抓取结束或停止后，可生成申请优先级。");

@@ -57,13 +57,21 @@ async def run_fixture(tmp_path, html=HTML, read_ids=None, **options):
         async def notify(state):
             progress.append(state)
 
-        # Skip only throttle waits in fixture tests; production clamps >=2s.
-        async def fast_pause(seconds=None):
+        # Fixture pages answer instantly, so the rate limit has nothing to
+        # protect. Collapse both waits and keep the cancellation check, which
+        # several tests depend on.
+        async def fast_settle(seconds):
             crawler._check_stop()
-            if seconds is not None:
-                await asyncio.sleep(min(seconds, 0.001))
+            await asyncio.sleep(min(seconds, 0.001))
+            crawler._check_stop()
 
-        crawler._pause = fast_pause
+        async def fast_throttle():
+            crawler._check_stop()
+
+        crawler._settle = fast_settle
+        crawler._throttle = fast_throttle
+        crawler._pause = lambda seconds=None: (
+            fast_throttle() if seconds is None else fast_settle(seconds))
         if read_ids is not None:
             read_detail = crawler._read_detail
 
@@ -431,3 +439,93 @@ def test_resume_expiry_boundary(age, eligible):
 def test_invalid_resume_dates_are_ignored(stamp):
     from sww.jobs.crawler import reusable_details
     assert not reusable_details([{"id": "1", "metadata": {"detail_status": "complete", "detail_collected_at": stamp}}])
+
+
+async def test_throttle_measures_from_the_last_request_not_from_the_last_action():
+    """The interval is what the site experiences.
+
+    A flat sleep charged the delay on top of however long the page took, so a
+    two second interval plus a two second load meant one request every four
+    seconds. Measuring from the request means a slow reply shortens the wait
+    that follows it, never lengthens it.
+    """
+    import time as clock
+    crawler = WaterlooWorksCrawler("/tmp/sww-throttle-test")
+    crawler._delay = 2.0
+    waited = []
+    crawler._settle = lambda seconds: waited.append(seconds) or asyncio.sleep(0)
+
+    crawler._last_request = clock.monotonic()          # just asked for something
+    await crawler._throttle()
+    assert 1.5 <= waited[-1] <= 2.4                    # close to a full interval
+
+    crawler._last_request = clock.monotonic() - 1.5    # the reply took a while
+    await crawler._throttle()
+    assert 0.2 <= waited[-1] <= 0.8                    # only the remainder
+
+    crawler._last_request = clock.monotonic() - 10     # long idle
+    before = len(waited)
+    await crawler._throttle()
+    assert len(waited) == before                       # no wait at all
+
+
+async def test_the_interval_never_falls_below_the_configured_floor():
+    crawler = WaterlooWorksCrawler("/tmp/sww-throttle-test")
+    for requested, expected in ((0.0, 0.5), (0.1, 0.5), (1.0, 1.0), (7.0, 7.0)):
+        crawler._busy = False
+        crawler._delay = max(0.5, float(requested))
+        assert crawler._delay == expected
+
+
+async def test_a_struggling_board_widens_the_interval_on_its_own():
+    """Rising latency is the warning that precedes a 429."""
+    crawler = WaterlooWorksCrawler("/tmp/sww-throttle-test")
+
+    class Response:
+        def __init__(self, status, url="https://waterlooworks.uwaterloo.ca/x"):
+            self.status, self.url = status, url
+
+    assert crawler._penalty == 1.0
+    crawler._on_response(Response(503))
+    assert crawler._penalty == 2.0                     # server error widens it
+
+    crawler._pending_since = __import__("time").monotonic() - 9
+    crawler._on_response(Response(200))
+    assert crawler._penalty > 2.0                      # a slow reply widens it too
+
+    raised = crawler._penalty
+    for _ in range(5):                                 # healthy replies recover
+        crawler._pending_since = __import__("time").monotonic() - 0.2
+        crawler._on_response(Response(200))
+    assert 1.0 <= crawler._penalty < raised
+
+    crawler._on_response(Response(429))
+    assert crawler._rate_limited is True                # and 429 still stops it
+
+
+async def test_only_navigations_and_data_calls_count_against_the_rate_limit():
+    crawler = WaterlooWorksCrawler("/tmp/sww-throttle-test")
+
+    class Request:
+        def __init__(self, kind, url="https://waterlooworks.uwaterloo.ca/x"):
+            self.resource_type, self.url = kind, url
+
+    for kind in ("document", "xhr", "fetch"):
+        crawler._on_request(Request(kind))
+    counted = crawler._request_count
+    for kind in ("image", "stylesheet", "font", "script"):
+        crawler._on_request(Request(kind))
+    assert crawler._request_count == counted           # page furniture is free
+    crawler._on_request(Request("document", "https://example.test/x"))
+    assert crawler._request_count == counted           # and other hosts are not ours
+
+
+async def test_polling_starts_tight_and_backs_off_within_its_budget():
+    crawler = WaterlooWorksCrawler("/tmp/sww-throttle-test")
+    waits = list(crawler._poll_intervals(budget=2.0))
+    assert waits[0] <= 0.06                            # first check is immediate-ish
+    # Growing, except the last step, which is clipped to land on the budget.
+    assert waits[:-1] == sorted(waits[:-1])
+    assert all(w <= 0.4 for w in waits)                # capped
+    assert abs(sum(waits) - 2.0) < 1e-6                # exactly the budget
+    assert len(waits) > 8                              # many more checks than the old 0.25s
